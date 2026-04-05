@@ -37,34 +37,58 @@ exports.promoteToDb = promoteToDb;
 exports.getExistingMemories = getExistingMemories;
 const crypto = __importStar(require("crypto"));
 const kuzu_helpers_js_1 = require("./kuzu-helpers.js");
+async function promoteTask(c, projectId, conn) {
+    // Dedupe by title across Task nodes
+    const existing = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (t:Task {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}'})
+     WHERE t.title = '${(0, kuzu_helpers_js_1.escape)(c.title)}'
+     RETURN t.id`);
+    if (existing.length > 0)
+        return null;
+    const status = c.status ?? "pending";
+    if (status === "active") {
+        // Enforce only-one-active
+        await conn.query(`MATCH (t:Task {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}', status: 'active'})
+       SET t.status = 'pending'`);
+    }
+    let taskOrder = 0;
+    if (status === "pending") {
+        const orderRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (t:Task {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}', status: 'pending'})
+       RETURN max(t.taskOrder) AS maxOrder`);
+        taskOrder = Number(orderRows[0]?.["maxOrder"] ?? 0) + 1;
+    }
+    const task = {
+        id: `task_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
+        title: c.title,
+        summary: c.summary,
+        status,
+        taskOrder,
+        projectId,
+        createdAt: new Date().toISOString(),
+    };
+    await conn.query(`CREATE (t:Task {
+      id: '${(0, kuzu_helpers_js_1.escape)(task.id)}',
+      title: '${(0, kuzu_helpers_js_1.escape)(task.title)}',
+      summary: '${(0, kuzu_helpers_js_1.escape)(task.summary)}',
+      status: '${(0, kuzu_helpers_js_1.escape)(task.status)}',
+      taskOrder: ${task.taskOrder},
+      projectId: '${(0, kuzu_helpers_js_1.escape)(task.projectId)}',
+      createdAt: '${(0, kuzu_helpers_js_1.escape)(task.createdAt)}'
+    })`);
+    return task;
+}
 async function promoteToDb(candidates, projectId, conn) {
     const promoted = [];
     for (const c of candidates) {
+        if (c.kind === "task") {
+            await promoteTask(c, projectId, conn);
+            continue;
+        }
         // Dedupe by title
         const existing = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}'})
        WHERE m.title = '${(0, kuzu_helpers_js_1.escape)(c.title)}'
        RETURN m.id`);
         if (existing.length > 0)
             continue;
-        // Tasks default to pending; enforce only-one-active
-        let status = c.status;
-        let taskOrder = 0;
-        if (c.kind === "task") {
-            if (!status)
-                status = "pending";
-            if (status === "active") {
-                // Demote any currently active task to pending
-                await conn.query(`MATCH (m:Memory {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}', kind: 'task', status: 'active'})
-           SET m.status = 'pending'`);
-            }
-            if (status === "pending") {
-                // Assign next order position
-                const orderRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}', kind: 'task', status: 'pending'})
-           RETURN max(m.taskOrder) AS maxOrder`);
-                const maxOrder = Number(orderRows[0]?.["maxOrder"] ?? 0);
-                taskOrder = maxOrder + 1;
-            }
-        }
         const memory = {
             id: `mem_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
             kind: c.kind,
@@ -74,8 +98,6 @@ async function promoteToDb(candidates, projectId, conn) {
             projectId,
             sessionId: c.sessionId,
             createdAt: new Date().toISOString(),
-            status,
-            taskOrder,
         };
         await conn.query(`CREATE (m:Memory {
         id: '${(0, kuzu_helpers_js_1.escape)(memory.id)}',
@@ -86,8 +108,8 @@ async function promoteToDb(candidates, projectId, conn) {
         projectId: '${(0, kuzu_helpers_js_1.escape)(memory.projectId)}',
         sessionId: '${(0, kuzu_helpers_js_1.escape)(memory.sessionId)}',
         createdAt: '${(0, kuzu_helpers_js_1.escape)(memory.createdAt)}',
-        status: '${(0, kuzu_helpers_js_1.escape)(memory.status ?? "")}',
-        taskOrder: ${memory.taskOrder ?? 0},
+        status: '',
+        taskOrder: 0,
         artifactId: ''
       })`);
         // Link to session if it exists

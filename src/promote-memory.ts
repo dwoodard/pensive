@@ -1,8 +1,67 @@
 import * as crypto from "crypto";
 import { queryAll, escape } from "./kuzu-helpers.js";
-import type { Memory } from "./types.js";
+import type { Memory, Task } from "./types.js";
 import type { CandidateMemory } from "./extract-memory.js";
 import type kuzu from "kuzu";
+
+async function promoteTask(
+  c: CandidateMemory,
+  projectId: string,
+  conn: InstanceType<typeof kuzu.Connection>
+): Promise<Task | null> {
+  // Dedupe by title across Task nodes
+  const existing = await queryAll(
+    conn,
+    `MATCH (t:Task {projectId: '${escape(projectId)}'})
+     WHERE t.title = '${escape(c.title)}'
+     RETURN t.id`
+  );
+  if (existing.length > 0) return null;
+
+  const status = c.status ?? "pending";
+
+  if (status === "active") {
+    // Enforce only-one-active
+    await conn.query(
+      `MATCH (t:Task {projectId: '${escape(projectId)}', status: 'active'})
+       SET t.status = 'pending'`
+    );
+  }
+
+  let taskOrder = 0;
+  if (status === "pending") {
+    const orderRows = await queryAll(
+      conn,
+      `MATCH (t:Task {projectId: '${escape(projectId)}', status: 'pending'})
+       RETURN max(t.taskOrder) AS maxOrder`
+    );
+    taskOrder = Number(orderRows[0]?.["maxOrder"] ?? 0) + 1;
+  }
+
+  const task: Task = {
+    id: `task_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
+    title: c.title,
+    summary: c.summary,
+    status,
+    taskOrder,
+    projectId,
+    createdAt: new Date().toISOString(),
+  };
+
+  await conn.query(
+    `CREATE (t:Task {
+      id: '${escape(task.id)}',
+      title: '${escape(task.title)}',
+      summary: '${escape(task.summary)}',
+      status: '${escape(task.status)}',
+      taskOrder: ${task.taskOrder},
+      projectId: '${escape(task.projectId)}',
+      createdAt: '${escape(task.createdAt)}'
+    })`
+  );
+
+  return task;
+}
 
 export async function promoteToDb(
   candidates: CandidateMemory[],
@@ -12,6 +71,11 @@ export async function promoteToDb(
   const promoted: Memory[] = [];
 
   for (const c of candidates) {
+    if (c.kind === "task") {
+      await promoteTask(c, projectId, conn);
+      continue;
+    }
+
     // Dedupe by title
     const existing = await queryAll(
       conn,
@@ -20,30 +84,6 @@ export async function promoteToDb(
        RETURN m.id`
     );
     if (existing.length > 0) continue;
-
-    // Tasks default to pending; enforce only-one-active
-    let status = c.status;
-    let taskOrder = 0;
-    if (c.kind === "task") {
-      if (!status) status = "pending";
-      if (status === "active") {
-        // Demote any currently active task to pending
-        await conn.query(
-          `MATCH (m:Memory {projectId: '${escape(projectId)}', kind: 'task', status: 'active'})
-           SET m.status = 'pending'`
-        );
-      }
-      if (status === "pending") {
-        // Assign next order position
-        const orderRows = await queryAll(
-          conn,
-          `MATCH (m:Memory {projectId: '${escape(projectId)}', kind: 'task', status: 'pending'})
-           RETURN max(m.taskOrder) AS maxOrder`
-        );
-        const maxOrder = Number(orderRows[0]?.["maxOrder"] ?? 0);
-        taskOrder = maxOrder + 1;
-      }
-    }
 
     const memory: Memory = {
       id: `mem_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
@@ -54,8 +94,6 @@ export async function promoteToDb(
       projectId,
       sessionId: c.sessionId,
       createdAt: new Date().toISOString(),
-      status,
-      taskOrder,
     };
 
     await conn.query(
@@ -68,8 +106,8 @@ export async function promoteToDb(
         projectId: '${escape(memory.projectId)}',
         sessionId: '${escape(memory.sessionId)}',
         createdAt: '${escape(memory.createdAt)}',
-        status: '${escape(memory.status ?? "")}',
-        taskOrder: ${memory.taskOrder ?? 0},
+        status: '',
+        taskOrder: 0,
         artifactId: ''
       })`
     );

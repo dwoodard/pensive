@@ -18,7 +18,7 @@ import { findProjectMemoryDir } from "./hook-utils.js";
 import { readProjectConfig } from "./config.js";
 import { getDb } from "./db.js";
 import { queryAll } from "./kuzu-helpers.js";
-import type { Memory } from "./types.js";
+import type { Memory, Task } from "./types.js";
 
 interface SessionStartPayload {
   session_id: string;
@@ -26,15 +26,15 @@ interface SessionStartPayload {
   hook_event_name: string;
 }
 
-const BUDGET = 2000;
+const BUDGET = 3000;
 
 function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 1) + "…";
 }
 
 function buildBundle(
-  activeTask: Memory | null,
-  pending: Memory[],
+  activeTask: Task | null,
+  pending: Task[],
   decisions: Memory[],
   facts: Memory[]
 ): string {
@@ -48,6 +48,17 @@ function buildBundle(
     remaining -= safe.length + 1; // +1 for newline
   };
 
+  push(`## project-memory CLI`);
+  push(`project-memory tasks              — list tasks (gantt view)`);
+  push(`project-memory tasks start <n>    — set task active by queue position`);
+  push(`project-memory tasks done         — complete the active task`);
+  push(`project-memory tasks add "title"  — add a task to the queue`);
+  push(`project-memory tasks block "why"  — mark active task blocked`);
+  push(`project-memory tasks move <f> <t> — reorder queue`);
+  push(`project-memory context            — show full memory context`);
+  push(`project-memory status             — show memory stats`);
+  push("");
+
   const hasTasks = activeTask !== null || pending.length > 0;
 
   if (hasTasks) {
@@ -60,7 +71,6 @@ function buildBundle(
       push(`Queue:`);
       pending.forEach((t, i) => push(`  ${i + 1}. ${t.title}`));
     }
-    push(`CLI: project-memory tasks | tasks add "..." | tasks done | tasks start <n>`);
     push(`Work the active task. When done run: project-memory tasks done`);
     push("");
   }
@@ -103,12 +113,12 @@ async function main(): Promise<void> {
     const pid = config.projectId;
 
     const activeRows = await queryAll(conn,
-      `MATCH (m:Memory {projectId: '${pid}', kind: 'task', status: 'active'})
-       RETURN m ORDER BY m.createdAt DESC LIMIT 1`
+      `MATCH (t:Task {projectId: '${pid}', status: 'active'})
+       RETURN t ORDER BY t.createdAt DESC LIMIT 1`
     );
     const pendingRows = await queryAll(conn,
-      `MATCH (m:Memory {projectId: '${pid}', kind: 'task', status: 'pending'})
-       RETURN m ORDER BY m.taskOrder ASC LIMIT 3`
+      `MATCH (t:Task {projectId: '${pid}', status: 'pending'})
+       RETURN t ORDER BY t.taskOrder ASC LIMIT 3`
     );
     const decisionRows = await queryAll(conn,
       `MATCH (m:Memory {projectId: '${pid}', kind: 'decision'})
@@ -119,14 +129,12 @@ async function main(): Promise<void> {
        RETURN m ORDER BY m.createdAt DESC LIMIT 2`
     );
 
-    const activeTask = activeRows[0]?.["m"] as Memory | undefined ?? null;
-    const pending = pendingRows.map((r) => r["m"] as Memory);
+    const activeTask = activeRows[0]?.["t"] as Task | undefined ?? null;
+    const pending = pendingRows.map((r) => r["t"] as Task);
     const decisions = decisionRows.map((r) => r["m"] as Memory);
     const facts = factRows.map((r) => r["m"] as Memory);
 
-    if (!activeTask && pending.length === 0 && decisions.length === 0 && facts.length === 0) {
-      process.exit(0);
-    }
+    // Always emit at minimum the CLI reference if the project is initialized
 
     const bundle = buildBundle(activeTask, pending, decisions, facts);
     if (bundle) process.stdout.write(bundle + "\n");

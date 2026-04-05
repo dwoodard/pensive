@@ -5,13 +5,13 @@ exports.formatContextBundle = formatContextBundle;
 const kuzu_helpers_js_1 = require("./kuzu-helpers.js");
 async function assembleContext(projectId, sessionSummary, conn) {
     // Get active task
-    const activeRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}', kind: 'task', status: 'active'})
-     RETURN m ORDER BY m.createdAt DESC LIMIT 1`);
-    const activeTask = activeRows.length > 0 ? activeRows[0]["m"] : null;
+    const activeRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (t:Task {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}', status: 'active'})
+     RETURN t ORDER BY t.createdAt DESC LIMIT 1`);
+    const activeTask = activeRows.length > 0 ? activeRows[0]["t"] : null;
     // Get next pending tasks
-    const pendingRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}', kind: 'task', status: 'pending'})
-     RETURN m ORDER BY m.createdAt ASC LIMIT 3`);
-    const nextTasks = pendingRows.map((r) => r["m"]);
+    const pendingRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (t:Task {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}', status: 'pending'})
+     RETURN t ORDER BY t.taskOrder ASC LIMIT 3`);
+    const nextTasks = pendingRows.map((r) => r["t"]);
     // Get key memories — decisions first, then questions, then facts
     const memoriesRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}'})
      WHERE m.kind IN ['decision', 'question', 'fact', 'summary']

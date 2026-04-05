@@ -62,28 +62,41 @@ async function ingestTurn(turn) {
     const { conn } = (0, db_js_1.getDb)(projectMemoryDir);
     // 1. Resolve session
     const sessionId = (0, append_turn_js_1.resolveSession)(turn, projectMemoryDir, config);
+    const userText = turn.messages.find((m) => m.role === "user")?.content ?? "";
     // Ensure session exists in DB
     const sessionRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (s:Session {id: '${sessionId}'}) RETURN s`);
-    if (sessionRows.length === 0) {
+    const isNewSession = sessionRows.length === 0;
+    // Derive title from first user message (strip tags, truncate)
+    function deriveTitle(text) {
+        const clean = text
+            .replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, "")
+            .replace(/\s+/g, " ")
+            .trim();
+        return clean.length > 80 ? clean.slice(0, 79) + "…" : clean;
+    }
+    if (isNewSession) {
+        const title = deriveTitle(userText);
         await conn.query(`CREATE (s:Session {
-        id: '${sessionId}',
-        projectId: '${config.projectId}',
+        id: '${(0, kuzu_helpers_js_1.escape)(sessionId)}',
+        projectId: '${(0, kuzu_helpers_js_1.escape)(config.projectId)}',
         startedAt: '${new Date().toISOString()}',
+        title: '${(0, kuzu_helpers_js_1.escape)(title)}',
         summary: ''
       })`);
-        await conn.query(`MATCH (p:Project {id: '${config.projectId}'}), (s:Session {id: '${sessionId}'})
+        await conn.query(`MATCH (p:Project {id: '${(0, kuzu_helpers_js_1.escape)(config.projectId)}'}), (s:Session {id: '${(0, kuzu_helpers_js_1.escape)(sessionId)}'})
        CREATE (p)-[:HAS_SESSION]->(s)`);
     }
     // 2. Append turn to session log
     (0, append_turn_js_1.appendTurn)(turn, projectMemoryDir, sessionId);
-    // 3. Update rolling session summary
+    // 3. Update rolling session summary — write to file and sync to Kuzu
     const existingSummary = (0, update_summary_js_1.readSummary)(projectMemoryDir, sessionId);
     const updatedSummary = (0, update_summary_js_1.buildUpdatedSummary)(existingSummary, turn);
     (0, update_summary_js_1.writeSummary)(projectMemoryDir, sessionId, updatedSummary);
+    await conn.query(`MATCH (s:Session {id: '${(0, kuzu_helpers_js_1.escape)(sessionId)}'})
+     SET s.summary = '${(0, kuzu_helpers_js_1.escape)(updatedSummary)}'`);
     // 4. Extract memories from the full turn (skip if LLM not configured)
     if (!config.llm?.model || config.llm.model === "local-model")
         return;
-    const userText = turn.messages.find((m) => m.role === "user")?.content ?? "";
     const assistantText = turn.messages.find((m) => m.role === "assistant")?.content ?? "";
     if (!userText)
         return;

@@ -372,8 +372,7 @@ async function getProjectDb(cwd: string) {
 }
 
 function shortId(id: string): string {
-  // mem_abc123def456 → abc123
-  return id.replace(/^mem_/, "").slice(0, 6);
+  return id.replace(/^(mem_|task_)/, "").slice(0, 6);
 }
 
 function printTaskList(
@@ -426,16 +425,16 @@ tasksCmd.action(async () => {
   const pid = config.projectId;
 
   const activeRows = await queryAll(conn,
-    `MATCH (m:Memory {projectId: '${pid}', kind: 'task', status: 'active'})
+    `MATCH (m:Task {projectId: '${pid}', status: 'active'})
      RETURN m ORDER BY m.createdAt DESC LIMIT 1`);
   const pendingRows = await queryAll(conn,
-    `MATCH (m:Memory {projectId: '${pid}', kind: 'task', status: 'pending'})
+    `MATCH (m:Task {projectId: '${pid}', status: 'pending'})
      RETURN m ORDER BY m.taskOrder ASC`);
   const blockedRows = await queryAll(conn,
-    `MATCH (m:Memory {projectId: '${pid}', kind: 'task', status: 'blocked'})
+    `MATCH (m:Task {projectId: '${pid}', status: 'blocked'})
      RETURN m ORDER BY m.createdAt DESC`);
   const doneRows = await queryAll(conn,
-    `MATCH (m:Memory {projectId: '${pid}', kind: 'task', status: 'done'})
+    `MATCH (m:Task {projectId: '${pid}', status: 'done'})
      RETURN m ORDER BY m.createdAt DESC LIMIT 10`);
 
   printTaskList(
@@ -454,28 +453,24 @@ tasksCmd
     const pid = config.projectId;
 
     const orderRows = await queryAll(conn,
-      `MATCH (m:Memory {projectId: '${pid}', kind: 'task', status: 'pending'})
+      `MATCH (m:Task {projectId: '${pid}', status: 'pending'})
        RETURN max(m.taskOrder) AS maxOrder`);
     const maxOrder = Number(orderRows[0]?.["maxOrder"] ?? 0);
     const taskOrder = maxOrder + 1;
 
     const { escape: esc } = await import("./kuzu-helpers.js");
     const { default: crypto } = await import("crypto");
-    const id = `mem_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const id = `task_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 
     await conn.query(
-      `CREATE (m:Memory {
+      `CREATE (t:Task {
         id: '${esc(id)}',
-        kind: 'task',
         title: '${esc(title)}',
         summary: '',
-        recallCue: '',
-        projectId: '${esc(pid)}',
-        sessionId: '',
-        createdAt: '${new Date().toISOString()}',
         status: 'pending',
         taskOrder: ${taskOrder},
-        artifactId: ''
+        projectId: '${esc(pid)}',
+        createdAt: '${new Date().toISOString()}'
       })`
     );
 
@@ -491,7 +486,7 @@ tasksCmd
     const { escape: esc } = await import("./kuzu-helpers.js");
 
     const pendingRows = await queryAll(conn,
-      `MATCH (m:Memory {projectId: '${pid}', kind: 'task', status: 'pending'})
+      `MATCH (m:Task {projectId: '${pid}', status: 'pending'})
        RETURN m ORDER BY m.taskOrder ASC`);
     const pending = pendingRows.map((r) => r["m"] as Record<string, unknown>);
 
@@ -511,11 +506,11 @@ tasksCmd
 
     // Demote any currently active task
     await conn.query(
-      `MATCH (m:Memory {projectId: '${esc(pid)}', kind: 'task', status: 'active'})
+      `MATCH (m:Task {projectId: '${esc(pid)}', status: 'active'})
        SET m.status = 'pending'`
     );
     await conn.query(
-      `MATCH (m:Memory {id: '${esc(target_id)}'}) SET m.status = 'active'`
+      `MATCH (m:Task {id: '${esc(target_id)}'}) SET m.status = 'active'`
     );
 
     const title = pending.find((t) => String(t["id"]) === target_id)?.["title"];
@@ -530,7 +525,7 @@ tasksCmd
     const pid = config.projectId;
 
     const rows = await queryAll(conn,
-      `MATCH (m:Memory {projectId: '${pid}', kind: 'task', status: 'active'})
+      `MATCH (m:Task {projectId: '${pid}', status: 'active'})
        RETURN m LIMIT 1`);
     if (rows.length === 0) {
       console.log("No active task.");
@@ -540,13 +535,13 @@ tasksCmd
     const { escape: esc } = await import("./kuzu-helpers.js");
     const task = rows[0]["m"] as Record<string, unknown>;
     await conn.query(
-      `MATCH (m:Memory {id: '${esc(String(task["id"]))}' }) SET m.status = 'done'`
+      `MATCH (m:Task {id: '${esc(String(task["id"]))}' }) SET m.status = 'done'`
     );
     console.log(`Done: ${task["title"]}`);
 
     // Show next pending task as a reminder
     const next = await queryAll(conn,
-      `MATCH (m:Memory {projectId: '${pid}', kind: 'task', status: 'pending'})
+      `MATCH (m:Task {projectId: '${pid}', status: 'pending'})
        RETURN m ORDER BY m.taskOrder ASC LIMIT 1`);
     if (next.length > 0) {
       const n = next[0]["m"] as Record<string, unknown>;
@@ -562,7 +557,7 @@ tasksCmd
     const pid = config.projectId;
 
     const rows = await queryAll(conn,
-      `MATCH (m:Memory {projectId: '${pid}', kind: 'task', status: 'active'})
+      `MATCH (m:Task {projectId: '${pid}', status: 'active'})
        RETURN m LIMIT 1`);
     if (rows.length === 0) {
       console.log("No active task.");
@@ -573,7 +568,7 @@ tasksCmd
     const task = rows[0]["m"] as Record<string, unknown>;
     const newSummary = `Blocked: ${reason}\n${task["summary"] ?? ""}`.trim();
     await conn.query(
-      `MATCH (m:Memory {id: '${esc(String(task["id"]))}' })
+      `MATCH (m:Task {id: '${esc(String(task["id"]))}' })
        SET m.status = 'blocked', m.summary = '${esc(newSummary)}'`
     );
     console.log(`Blocked: ${task["title"]}`);
@@ -588,7 +583,7 @@ tasksCmd
     const pid = config.projectId;
 
     const pendingRows = await queryAll(conn,
-      `MATCH (m:Memory {projectId: '${pid}', kind: 'task', status: 'pending'})
+      `MATCH (m:Task {projectId: '${pid}', status: 'pending'})
        RETURN m ORDER BY m.taskOrder ASC`);
     const pending = pendingRows.map((r) => r["m"] as Record<string, unknown>);
 
@@ -607,7 +602,7 @@ tasksCmd
     const { escape: esc } = await import("./kuzu-helpers.js");
     for (let i = 0; i < pending.length; i++) {
       await conn.query(
-        `MATCH (m:Memory {id: '${esc(String(pending[i]["id"]))}' }) SET m.taskOrder = ${i + 1}`
+        `MATCH (m:Task {id: '${esc(String(pending[i]["id"]))}' }) SET m.taskOrder = ${i + 1}`
       );
     }
 

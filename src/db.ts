@@ -40,6 +40,7 @@ export async function applySchema(
       id STRING,
       projectId STRING,
       startedAt STRING,
+      title STRING,
       summary STRING,
       PRIMARY KEY (id)
     )`,
@@ -68,7 +69,18 @@ export async function applySchema(
       createdAt STRING,
       PRIMARY KEY (id)
     )`,
+    `CREATE NODE TABLE IF NOT EXISTS Task(
+      id STRING,
+      title STRING,
+      summary STRING,
+      status STRING,
+      taskOrder INT64,
+      projectId STRING,
+      createdAt STRING,
+      PRIMARY KEY (id)
+    )`,
     `CREATE REL TABLE IF NOT EXISTS HAS_SESSION(FROM Project TO Session)`,
+    `CREATE REL TABLE IF NOT EXISTS HAS_TASK(FROM Project TO Task)`,
     `CREATE REL TABLE IF NOT EXISTS HAS_MEMORY(FROM Session TO Memory)`,
     `CREATE REL TABLE IF NOT EXISTS PRODUCED(FROM Session TO Artifact)`,
     `CREATE REL TABLE IF NOT EXISTS REFERS_TO(FROM Memory TO Artifact)`,
@@ -80,10 +92,49 @@ export async function applySchema(
     await conn.query(stmt);
   }
 
-  // Migrations for existing databases
+  // Migration: move task Memory nodes → Task nodes
   try {
-    await conn.query(`ALTER TABLE Memory ADD taskOrder INT64 DEFAULT 0`);
+    const taskMemories = await conn.query(
+      `MATCH (m:Memory {kind: 'task'}) RETURN m`
+    );
+    const qr = Array.isArray(taskMemories) ? taskMemories[0] : taskMemories;
+    const rows = await (qr as { getAll(): Promise<Record<string, unknown>[]> }).getAll();
+
+    for (const row of rows) {
+      const m = row["m"] as Record<string, unknown>;
+      const id = String(m["id"]);
+      const esc = (s: string) => (s ?? "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+
+      // Check if already migrated
+      const existing = await conn.query(`MATCH (t:Task {id: '${esc(id)}'}) RETURN t.id`);
+      const eqr = Array.isArray(existing) ? existing[0] : existing;
+      const erows = await (eqr as { getAll(): Promise<Record<string, unknown>[]> }).getAll();
+      if (erows.length > 0) continue;
+
+      const status = String(m["status"] || "pending");
+      const taskOrder = Number(m["taskOrder"] ?? 0);
+      await conn.query(
+        `CREATE (t:Task {
+          id: '${esc(id)}',
+          title: '${esc(String(m["title"] ?? ""))}',
+          summary: '${esc(String(m["summary"] ?? ""))}',
+          status: '${esc(status)}',
+          taskOrder: ${taskOrder},
+          projectId: '${esc(String(m["projectId"] ?? ""))}',
+          createdAt: '${esc(String(m["createdAt"] ?? new Date().toISOString()))}'
+        })`
+      );
+    }
+
+    // Remove migrated task Memory nodes
+    if (rows.length > 0) {
+      await conn.query(`MATCH (m:Memory {kind: 'task'}) DETACH DELETE m`);
+    }
   } catch {
-    // Column already exists — safe to ignore
+    // Migration already done or no task memories exist
   }
+
+  // Column migrations — safe to ignore if already applied
+  try { await conn.query(`ALTER TABLE Memory ADD taskOrder INT64 DEFAULT 0`); } catch { /* exists */ }
+  try { await conn.query(`ALTER TABLE Session ADD title STRING DEFAULT ''`); } catch { /* exists */ }
 }

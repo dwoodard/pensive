@@ -1,4 +1,4 @@
-import type { Memory, ContextBundle } from "./types.js";
+import type { Memory, Task, ContextBundle } from "./types.js";
 import type kuzu from "kuzu";
 import { queryAll, escape } from "./kuzu-helpers.js";
 
@@ -10,19 +10,19 @@ export async function assembleContext(
   // Get active task
   const activeRows = await queryAll(
     conn,
-    `MATCH (m:Memory {projectId: '${escape(projectId)}', kind: 'task', status: 'active'})
-     RETURN m ORDER BY m.createdAt DESC LIMIT 1`
+    `MATCH (t:Task {projectId: '${escape(projectId)}', status: 'active'})
+     RETURN t ORDER BY t.createdAt DESC LIMIT 1`
   );
-  const activeTask: Memory | null =
-    activeRows.length > 0 ? (activeRows[0]["m"] as Memory) : null;
+  const activeTask: Task | null =
+    activeRows.length > 0 ? (activeRows[0]["t"] as Task) : null;
 
   // Get next pending tasks
   const pendingRows = await queryAll(
     conn,
-    `MATCH (m:Memory {projectId: '${escape(projectId)}', kind: 'task', status: 'pending'})
-     RETURN m ORDER BY m.createdAt ASC LIMIT 3`
+    `MATCH (t:Task {projectId: '${escape(projectId)}', status: 'pending'})
+     RETURN t ORDER BY t.taskOrder ASC LIMIT 3`
   );
-  const nextTasks: Memory[] = pendingRows.map((r) => r["m"] as Memory);
+  const nextTasks: Task[] = pendingRows.map((r) => r["t"] as Task);
 
   // Get key memories — decisions first, then questions, then facts
   const memoriesRows = await queryAll(

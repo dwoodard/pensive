@@ -32,9 +32,17 @@ export interface Memory {
   projectId: string;
   sessionId: string;
   createdAt: string;
-  status?: TaskStatus;   // only for kind=task
-  taskOrder?: number;    // only for kind=task, pending queue ordering
   artifactId?: string;
+}
+
+export interface Task {
+  id: string;
+  title: string;
+  summary: string;
+  status: TaskStatus;
+  taskOrder: number;
+  projectId: string;
+  createdAt: string;
 }
 
 export interface Artifact {
@@ -69,8 +77,8 @@ export interface ProjectConfig {
 }
 
 export interface ContextBundle {
-  activeTask: Memory | null;
-  nextTasks: Memory[];
+  activeTask: Task | null;
+  nextTasks: Task[];
   keyMemories: Memory[];
   sessionSummary: string;
 }
