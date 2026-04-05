@@ -34,6 +34,7 @@ export interface Memory {
   sessionId: string;
   createdAt: string;
   artifactId?: string;
+  embedding?: number[];
 }
 
 export interface Task {

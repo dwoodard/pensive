@@ -1,5 +1,6 @@
 import * as crypto from "crypto";
 import { queryAll, escape } from "./kuzu-helpers.js";
+import { embed } from "./llm.js";
 import type { Memory, Task } from "./types.js";
 import type { CandidateMemory } from "./extract-memory.js";
 import type kuzu from "kuzu";
@@ -85,6 +86,13 @@ export async function promoteToDb(
     );
     if (existing.length > 0) continue;
 
+    let embedding: number[] = [];
+    try {
+      embedding = await embed(`${c.title}. ${c.summary}`);
+    } catch {
+      // Embedding is best-effort — don't block promotion if model is unavailable
+    }
+
     const memory: Memory = {
       id: `mem_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
       kind: c.kind,
@@ -94,7 +102,12 @@ export async function promoteToDb(
       projectId,
       sessionId: c.sessionId,
       createdAt: new Date().toISOString(),
+      embedding,
     };
+
+    const embeddingLiteral = embedding.length > 0
+      ? `[${embedding.join(", ")}]`
+      : `[]`;
 
     await conn.query(
       `CREATE (m:Memory {
@@ -108,7 +121,8 @@ export async function promoteToDb(
         createdAt: '${escape(memory.createdAt)}',
         status: '',
         taskOrder: 0,
-        artifactId: ''
+        artifactId: '',
+        embedding: ${embeddingLiteral}
       })`
     );
 

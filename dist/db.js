@@ -85,6 +85,7 @@ async function applySchema(conn) {
       status STRING,
       taskOrder INT64,
       artifactId STRING,
+      embedding FLOAT[],
       PRIMARY KEY (id)
     )`,
         `CREATE NODE TABLE IF NOT EXISTS Artifact(
@@ -164,6 +165,10 @@ async function applySchema(conn) {
     catch { /* exists */ }
     try {
         await conn.query(`ALTER TABLE Session ADD title STRING DEFAULT ''`);
+    }
+    catch { /* exists */ }
+    try {
+        await conn.query(`ALTER TABLE Memory ADD embedding FLOAT[] DEFAULT []`);
     }
     catch { /* exists */ }
     // Backfill: connect orphaned Task nodes to their Project via HAS_TASK

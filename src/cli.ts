@@ -16,6 +16,7 @@ import {
   PROVIDER_DEFAULTS,
   type ProjectConfig,
 } from "./config.js";
+import { embed } from "./llm.js";
 import type { Turn } from "./types.js";
 
 const program = new Command();
@@ -159,6 +160,52 @@ program
     } catch {
       // DB not yet initialized — skip stats
     }
+  });
+
+program
+  .command("backfill-embeddings")
+  .description("Generate and store embeddings for all Memory nodes that are missing them")
+  .action(async () => {
+    const detected = detectProject(process.cwd());
+    if (!detected) { console.error("Not in a git repository."); process.exit(1); }
+
+    const projectMemoryDir = path.join(detected.repoRoot, ".project-memory");
+    const config = readProjectConfig(projectMemoryDir);
+    const { conn } = getDb(projectMemoryDir);
+
+    const rows = await queryAll(
+      conn,
+      `MATCH (m:Memory {projectId: '${config.projectId}'})
+       WHERE m.embedding IS NULL OR size(m.embedding) = 0
+       RETURN m.id AS id, m.title AS title, m.summary AS summary`
+    );
+
+    if (rows.length === 0) {
+      console.log("All Memory nodes already have embeddings.");
+      return;
+    }
+
+    console.log(`Backfilling ${rows.length} memory node(s)...`);
+    let done = 0, failed = 0;
+
+    for (const row of rows) {
+      const id = String(row["id"]);
+      const text = `${row["title"]}. ${row["summary"]}`;
+      try {
+        const embedding = await embed(text);
+        const literal = `[${embedding.join(", ")}]`;
+        await conn.query(
+          `MATCH (m:Memory {id: '${id}'}) SET m.embedding = ${literal}`
+        );
+        done++;
+        process.stdout.write(`\r  ${done}/${rows.length} embedded, ${failed} failed`);
+      } catch (err) {
+        failed++;
+        process.stdout.write(`\r  ${done}/${rows.length} embedded, ${failed} failed`);
+      }
+    }
+
+    console.log(`\nDone. ${done} embedded, ${failed} failed.`);
   });
 
 function findOpenPort(preferred: number): Promise<number> {

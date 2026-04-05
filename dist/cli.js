@@ -46,6 +46,7 @@ const detect_project_js_1 = require("./detect-project.js");
 const db_js_1 = require("./db.js");
 const kuzu_helpers_js_1 = require("./kuzu-helpers.js");
 const config_js_1 = require("./config.js");
+const llm_js_1 = require("./llm.js");
 const program = new commander_1.Command();
 program
     .name("project-memory")
@@ -163,6 +164,44 @@ program
     catch {
         // DB not yet initialized — skip stats
     }
+});
+program
+    .command("backfill-embeddings")
+    .description("Generate and store embeddings for all Memory nodes that are missing them")
+    .action(async () => {
+    const detected = (0, detect_project_js_1.detectProject)(process.cwd());
+    if (!detected) {
+        console.error("Not in a git repository.");
+        process.exit(1);
+    }
+    const projectMemoryDir = path.join(detected.repoRoot, ".project-memory");
+    const config = (0, config_js_1.readProjectConfig)(projectMemoryDir);
+    const { conn } = (0, db_js_1.getDb)(projectMemoryDir);
+    const rows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${config.projectId}'})
+       WHERE m.embedding IS NULL OR size(m.embedding) = 0
+       RETURN m.id AS id, m.title AS title, m.summary AS summary`);
+    if (rows.length === 0) {
+        console.log("All Memory nodes already have embeddings.");
+        return;
+    }
+    console.log(`Backfilling ${rows.length} memory node(s)...`);
+    let done = 0, failed = 0;
+    for (const row of rows) {
+        const id = String(row["id"]);
+        const text = `${row["title"]}. ${row["summary"]}`;
+        try {
+            const embedding = await (0, llm_js_1.embed)(text);
+            const literal = `[${embedding.join(", ")}]`;
+            await conn.query(`MATCH (m:Memory {id: '${id}'}) SET m.embedding = ${literal}`);
+            done++;
+            process.stdout.write(`\r  ${done}/${rows.length} embedded, ${failed} failed`);
+        }
+        catch (err) {
+            failed++;
+            process.stdout.write(`\r  ${done}/${rows.length} embedded, ${failed} failed`);
+        }
+    }
+    console.log(`\nDone. ${done} embedded, ${failed} failed.`);
 });
 function findOpenPort(preferred) {
     return new Promise((resolve) => {

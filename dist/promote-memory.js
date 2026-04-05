@@ -37,6 +37,7 @@ exports.promoteToDb = promoteToDb;
 exports.getExistingMemories = getExistingMemories;
 const crypto = __importStar(require("crypto"));
 const kuzu_helpers_js_1 = require("./kuzu-helpers.js");
+const llm_js_1 = require("./llm.js");
 async function promoteTask(c, projectId, conn) {
     // Dedupe by title across Task nodes
     const existing = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (t:Task {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}'})
@@ -89,6 +90,13 @@ async function promoteToDb(candidates, projectId, conn) {
        RETURN m.id`);
         if (existing.length > 0)
             continue;
+        let embedding = [];
+        try {
+            embedding = await (0, llm_js_1.embed)(`${c.title}. ${c.summary}`);
+        }
+        catch {
+            // Embedding is best-effort — don't block promotion if model is unavailable
+        }
         const memory = {
             id: `mem_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
             kind: c.kind,
@@ -98,7 +106,11 @@ async function promoteToDb(candidates, projectId, conn) {
             projectId,
             sessionId: c.sessionId,
             createdAt: new Date().toISOString(),
+            embedding,
         };
+        const embeddingLiteral = embedding.length > 0
+            ? `[${embedding.join(", ")}]`
+            : `[]`;
         await conn.query(`CREATE (m:Memory {
         id: '${(0, kuzu_helpers_js_1.escape)(memory.id)}',
         kind: '${(0, kuzu_helpers_js_1.escape)(memory.kind)}',
@@ -110,7 +122,8 @@ async function promoteToDb(candidates, projectId, conn) {
         createdAt: '${(0, kuzu_helpers_js_1.escape)(memory.createdAt)}',
         status: '',
         taskOrder: 0,
-        artifactId: ''
+        artifactId: '',
+        embedding: ${embeddingLiteral}
       })`);
         // Link to session if it exists
         const sessionRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (s:Session {id: '${(0, kuzu_helpers_js_1.escape)(c.sessionId)}'}) RETURN s`);
