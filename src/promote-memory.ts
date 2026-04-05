@@ -1,45 +1,36 @@
 import * as crypto from "crypto";
-import type {
-  CandidateMemory,
-  Memory,
-  ProjectConfig,
-} from "./types.js";
+import { queryAll, escape } from "./kuzu-helpers.js";
+import type { Memory } from "./types.js";
+import type { CandidateMemory } from "./extract-memory.js";
 import type kuzu from "kuzu";
-import { queryAll } from "./kuzu-helpers.js";
 
-function escape(s: string): string {
-  return (s ?? "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-}
-
-export async function promoteMemories(
+export async function promoteToDb(
   candidates: CandidateMemory[],
-  sessionId: string,
-  config: ProjectConfig,
+  projectId: string,
   conn: InstanceType<typeof kuzu.Connection>
 ): Promise<Memory[]> {
   const promoted: Memory[] = [];
 
-  for (const candidate of candidates) {
-    // Dedupe: check if a memory with the same title already exists
-    const rows = await queryAll(
+  for (const c of candidates) {
+    // Dedupe by title
+    const existing = await queryAll(
       conn,
-      `MATCH (m:Memory {projectId: '${escape(config.projectId)}'})
-       WHERE m.title = '${escape(candidate.title)}'
+      `MATCH (m:Memory {projectId: '${escape(projectId)}'})
+       WHERE m.title = '${escape(c.title)}'
        RETURN m.id`
     );
-    if (rows.length > 0) continue; // already known
+    if (existing.length > 0) continue;
 
     const memory: Memory = {
       id: `mem_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
-      kind: candidate.kind,
-      title: candidate.title,
-      summary: candidate.summary,
-      recallCue: candidate.recallCue,
-      projectId: config.projectId,
-      sessionId,
+      kind: c.kind,
+      title: c.title,
+      summary: c.summary,
+      recallCue: c.recallCue,
+      projectId,
+      sessionId: c.sessionId,
       createdAt: new Date().toISOString(),
-      status: candidate.status ?? undefined,
-      artifactId: undefined,
+      status: c.status,
     };
 
     await conn.query(
@@ -53,18 +44,33 @@ export async function promoteMemories(
         sessionId: '${escape(memory.sessionId)}',
         createdAt: '${escape(memory.createdAt)}',
         status: '${escape(memory.status ?? "")}',
-        artifactId: '${escape(memory.artifactId ?? "")}'
+        artifactId: ''
       })`
     );
 
-    // Link memory to session
-    await conn.query(
-      `MATCH (s:Session {id: '${escape(sessionId)}'}), (m:Memory {id: '${escape(memory.id)}'})
-       CREATE (s)-[:HAS_MEMORY]->(m)`
-    );
+    // Link to session if it exists
+    const sessionRows = await queryAll(conn, `MATCH (s:Session {id: '${escape(c.sessionId)}'}) RETURN s`);
+    if (sessionRows.length > 0) {
+      await conn.query(
+        `MATCH (s:Session {id: '${escape(c.sessionId)}'}), (m:Memory {id: '${escape(memory.id)}'})
+         CREATE (s)-[:HAS_MEMORY]->(m)`
+      );
+    }
 
     promoted.push(memory);
   }
 
   return promoted;
+}
+
+export async function getExistingMemories(
+  projectId: string,
+  conn: InstanceType<typeof kuzu.Connection>
+): Promise<Memory[]> {
+  const rows = await queryAll(
+    conn,
+    `MATCH (m:Memory {projectId: '${escape(projectId)}'})
+     RETURN m ORDER BY m.createdAt DESC LIMIT 50`
+  );
+  return rows.map((r) => r["m"] as Memory);
 }

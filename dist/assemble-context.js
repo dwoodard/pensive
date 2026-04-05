@@ -3,20 +3,17 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.assembleContext = assembleContext;
 exports.formatContextBundle = formatContextBundle;
 const kuzu_helpers_js_1 = require("./kuzu-helpers.js");
-function escape(s) {
-    return (s ?? "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-}
 async function assembleContext(projectId, sessionSummary, conn) {
     // Get active task
-    const activeRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${escape(projectId)}', kind: 'task', status: 'active'})
+    const activeRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}', kind: 'task', status: 'active'})
      RETURN m ORDER BY m.createdAt DESC LIMIT 1`);
     const activeTask = activeRows.length > 0 ? activeRows[0]["m"] : null;
     // Get next pending tasks
-    const pendingRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${escape(projectId)}', kind: 'task', status: 'pending'})
+    const pendingRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}', kind: 'task', status: 'pending'})
      RETURN m ORDER BY m.createdAt ASC LIMIT 3`);
     const nextTasks = pendingRows.map((r) => r["m"]);
     // Get key memories — decisions first, then questions, then facts
-    const memoriesRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${escape(projectId)}'})
+    const memoriesRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}'})
      WHERE m.kind IN ['decision', 'question', 'fact', 'summary']
      RETURN m ORDER BY m.createdAt DESC LIMIT 5`);
     const keyMemories = memoriesRows.map((r) => r["m"]);
@@ -28,6 +25,18 @@ async function assembleContext(projectId, sessionSummary, conn) {
     };
 }
 function formatContextBundle(bundle) {
+    const isEmpty = !bundle.activeTask &&
+        bundle.nextTasks.length === 0 &&
+        bundle.keyMemories.length === 0 &&
+        !bundle.sessionSummary;
+    if (isEmpty) {
+        return [
+            "## Project Memory Context",
+            "",
+            "No memories yet. Memories are extracted automatically at the end of each AI turn.",
+            "Run: project-memory config  to set your LLM and embedding models.",
+        ].join("\n");
+    }
     const lines = ["## Project Memory Context\n"];
     if (bundle.activeTask) {
         lines.push(`### Active Task\n${bundle.activeTask.title}`);

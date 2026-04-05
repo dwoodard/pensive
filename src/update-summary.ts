@@ -27,15 +27,23 @@ export function writeSummary(
   fs.writeFileSync(summaryPath, summary);
 }
 
+function stripTags(text: string): string {
+  return text
+    .replace(/<ide_opened_file>[\s\S]*?<\/ide_opened_file>/g, "")
+    .replace(/<ide_selection>[\s\S]*?<\/ide_selection>/g, "")
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export function buildUpdatedSummary(
   existingSummary: string,
   turn: Turn
 ): string {
-  // This is called after extract-memory with the LLM-generated summary update.
-  // For now, append a timestamped entry. The real update happens via the extraction prompt.
-  const userMsg = turn.messages.find((m) => m.role === "user")?.content ?? "";
-  const assistantMsg =
-    turn.messages.find((m) => m.role === "assistant")?.content ?? "";
+  const userMsg = stripTags(turn.messages.find((m) => m.role === "user")?.content ?? "");
+  const assistantMsg = stripTags(
+    turn.messages.find((m) => m.role === "assistant")?.content ?? ""
+  );
 
   const truncate = (s: string, n: number) =>
     s.length > n ? s.slice(0, n) + "..." : s;

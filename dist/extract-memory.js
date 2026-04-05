@@ -1,4 +1,8 @@
 "use strict";
+/**
+ * LLM-based memory extraction.
+ * Used by both UserPromptSubmit (user text only) and PreCompact (full candidates review).
+ */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -33,94 +37,219 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.buildExtractionPrompt = buildExtractionPrompt;
-exports.writeCandidates = writeCandidates;
-exports.parseCandidates = parseCandidates;
+exports.extractFromUserMessage = extractFromUserMessage;
+exports.extractFromTurn = extractFromTurn;
+exports.reviewCandidates = reviewCandidates;
+exports.writeCandidateFile = writeCandidateFile;
+exports.readAllCandidates = readAllCandidates;
+exports.clearCandidates = clearCandidates;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const crypto = __importStar(require("crypto"));
-const EXTRACTION_PROMPT = `You are a memory extraction system for an AI-assisted coding session.
+const llm_js_1 = require("./llm.js");
+// ─── Prompts ────────────────────────────────────────────────────────────────
+const USER_PROMPT_EXTRACT = `You are a memory extraction system for an AI coding assistant.
 
-Your job: read a completed conversation turn and extract 0, 1, or 2 memories worth keeping.
+A user just sent this message:
+---
+{USER_TEXT}
+---
 
-## Project context
-Project: {PROJECT_NAME}
-Current session summary:
-{SESSION_SUMMARY}
-
-## Turn to analyze
-{TURN}
-
-## Memory kinds
-- summary: compressed recap of a session or outcome
-- decision: a choice that was made
-- fact: a reusable claim or believed truth
-- reference: a pointer to something worth looking up later
-- task: work to resume or follow up on (include status: pending|active|done|blocked)
-- question: an unresolved issue or uncertainty
-
-## Promotion rules
-Only extract a memory if at least one is true:
-- it changes project understanding
-- it affects future decisions
-- it is likely to be needed again
-- it points to something worth revisiting
-- it remains unresolved
+Does this message contain anything worth remembering long-term?
+Only extract if the user is clearly stating:
+- a decision that was made
+- a task or next step
+- an open question or blocker
+- a fact about the project
 
 Do NOT extract:
-- routine back-and-forth
-- failed attempts
-- low-confidence speculation
-- trivial implementation details
+- questions to the assistant
+- casual conversation
+- requests for help
+- anything that is not a clear statement from the user
 
-## Output format
-Respond with a JSON array of 0–2 memory objects. Nothing else.
+Respond with a JSON array of 0-2 memory objects. Nothing else.
+If nothing is worth keeping respond with: []
 
 [
   {
-    "kind": "decision",
-    "title": "Short title",
-    "summary": "One or two sentence summary of what matters.",
-    "recallCue": "Short phrase describing when this memory is useful",
-    "status": null
+    "kind": "decision" | "task" | "question" | "fact",
+    "title": "short title",
+    "summary": "one sentence",
+    "recallCue": "when is this useful",
+    "status": "pending" | "active" | null
   }
-]
+]`;
+const TURN_EXTRACT_PROMPT = `You are a memory extraction system for an AI coding assistant.
 
-If nothing is worth keeping, respond with: []`;
-function buildExtractionPrompt(turn, sessionSummary, projectName) {
-    const turnText = turn.messages
-        .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
-        .join("\n\n");
-    return EXTRACTION_PROMPT.replace("{PROJECT_NAME}", projectName)
-        .replace("{SESSION_SUMMARY}", sessionSummary || "(no summary yet)")
-        .replace("{TURN}", turnText);
+Here is a completed conversation turn:
+--- USER ---
+{USER_TEXT}
+--- ASSISTANT ---
+{ASSISTANT_TEXT}
+---
+
+Extract 0-3 memories worth keeping long-term. Only extract:
+- decisions made (e.g. "we decided to use X")
+- tasks created or completed (e.g. "next step: implement Y")
+- open questions or blockers (e.g. "still need to figure out Z")
+- facts about the project (e.g. "the DB schema is at path X")
+
+Do NOT extract:
+- vague or conversational exchanges
+- anything already obvious from the code
+- the assistant's explanations or instructions
+
+Respond with a JSON array. Nothing else.
+If nothing is worth keeping respond with: []
+
+[
+  {
+    "kind": "decision" | "task" | "question" | "fact",
+    "title": "short title",
+    "summary": "one sentence",
+    "recallCue": "when is this useful",
+    "status": "pending" | "active" | "done" | null
+  }
+]`;
+const COMPACT_REVIEW_PROMPT = `You are a memory vetting system for an AI coding assistant.
+
+Project: {PROJECT_NAME}
+
+Here are candidate memories collected during this session:
+---
+{CANDIDATES}
+---
+
+Here are memories already in the database (do not duplicate):
+---
+{EXISTING}
+---
+
+Your job: decide which candidates deserve to be permanently remembered.
+
+For each candidate, choose one action:
+- "promote" — worth keeping, new information
+- "merge" — same as an existing memory, skip it
+- "discard" — not useful enough
+
+Respond with a JSON array. Nothing else.
+
+[
+  {
+    "id": "<candidate id>",
+    "action": "promote" | "merge" | "discard",
+    "kind": "summary" | "decision" | "fact" | "reference" | "task" | "question",
+    "title": "...",
+    "summary": "...",
+    "recallCue": "...",
+    "status": "pending" | "active" | "done" | null
+  }
+]`;
+// ─── Extraction ──────────────────────────────────────────────────────────────
+async function extractFromUserMessage(userText, sessionId, turnId) {
+    const prompt = USER_PROMPT_EXTRACT.replace("{USER_TEXT}", userText);
+    const response = await (0, llm_js_1.llmComplete)(prompt);
+    return parseCandidates(response, sessionId, turnId);
 }
-function writeCandidates(candidates, projectMemoryDir, sessionId, turnId) {
+async function extractFromTurn(userText, assistantText, sessionId, turnId) {
+    const prompt = TURN_EXTRACT_PROMPT
+        .replace("{USER_TEXT}", userText)
+        .replace("{ASSISTANT_TEXT}", assistantText);
+    const response = await (0, llm_js_1.llmComplete)(prompt);
+    return parseCandidates(response, sessionId, turnId, 3);
+}
+async function reviewCandidates(candidates, existingMemories, projectName) {
     if (candidates.length === 0)
-        return "";
-    const candidatesDir = path.join(projectMemoryDir, "candidates");
-    const file = path.join(candidatesDir, `${turnId}.json`);
-    const entries = candidates.map((c) => ({
-        id: `cand_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
-        sessionId,
-        turnId,
-        createdAt: new Date().toISOString(),
-        ...c,
-    }));
-    fs.writeFileSync(file, JSON.stringify(entries, null, 2));
-    return file;
+        return [];
+    const prompt = COMPACT_REVIEW_PROMPT
+        .replace("{PROJECT_NAME}", projectName)
+        .replace("{CANDIDATES}", JSON.stringify(candidates, null, 2))
+        .replace("{EXISTING}", existingMemories.length > 0
+        ? JSON.stringify(existingMemories.map((m) => ({ id: m.id, kind: m.kind, title: m.title, summary: m.summary })), null, 2)
+        : "(none yet)");
+    const response = await (0, llm_js_1.llmComplete)(prompt);
+    return parseReviewResponse(response, candidates);
 }
-function parseCandidates(response) {
+// ─── Candidate file I/O ──────────────────────────────────────────────────────
+function writeCandidateFile(projectMemoryDir, candidates) {
+    if (candidates.length === 0)
+        return;
+    const dir = path.join(projectMemoryDir, "candidates");
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${candidates[0].turnId}.json`);
+    fs.writeFileSync(file, JSON.stringify(candidates, null, 2));
+}
+function readAllCandidates(projectMemoryDir) {
+    const dir = path.join(projectMemoryDir, "candidates");
+    if (!fs.existsSync(dir))
+        return [];
+    return fs.readdirSync(dir)
+        .filter((f) => f.endsWith(".json"))
+        .flatMap((f) => {
+        try {
+            return JSON.parse(fs.readFileSync(path.join(dir, f), "utf-8"));
+        }
+        catch {
+            return [];
+        }
+    });
+}
+function clearCandidates(projectMemoryDir) {
+    const dir = path.join(projectMemoryDir, "candidates");
+    if (!fs.existsSync(dir))
+        return;
+    fs.readdirSync(dir)
+        .filter((f) => f.endsWith(".json"))
+        .forEach((f) => fs.unlinkSync(path.join(dir, f)));
+}
+// ─── Parsing ─────────────────────────────────────────────────────────────────
+function parseCandidates(response, sessionId, turnId, maxItems = 2) {
     try {
-        const trimmed = response.trim();
-        // Strip markdown code fences if present
-        const json = trimmed.startsWith("```")
-            ? trimmed.replace(/^```[a-z]*\n?/, "").replace(/\n?```$/, "")
-            : trimmed;
-        const parsed = JSON.parse(json);
+        const trimmed = response.trim().replace(/^```[a-z]*\n?/, "").replace(/\n?```$/, "");
+        const parsed = JSON.parse(trimmed);
         if (!Array.isArray(parsed))
             return [];
-        return parsed.slice(0, 2);
+        return parsed.slice(0, maxItems).map((c) => ({
+            id: `cand_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
+            sessionId,
+            turnId,
+            createdAt: new Date().toISOString(),
+            kind: c.kind ?? "fact",
+            title: c.title ?? "",
+            summary: c.summary ?? "",
+            recallCue: c.recallCue ?? "",
+            status: c.status ?? undefined,
+        }));
+    }
+    catch {
+        return [];
+    }
+}
+function parseReviewResponse(response, candidates) {
+    try {
+        const trimmed = response.trim().replace(/^```[a-z]*\n?/, "").replace(/\n?```$/, "");
+        const parsed = JSON.parse(trimmed);
+        if (!Array.isArray(parsed))
+            return [];
+        return parsed
+            .filter((r) => r.action === "promote")
+            .map((r) => {
+            const original = candidates.find((c) => c.id === r.id);
+            return {
+                ...(original ?? {}),
+                id: r.id,
+                action: r.action,
+                kind: r.kind ?? original?.kind ?? "fact",
+                title: r.title ?? original?.title ?? "",
+                summary: r.summary ?? original?.summary ?? "",
+                recallCue: r.recallCue ?? original?.recallCue ?? "",
+                status: r.status ?? original?.status ?? undefined,
+                sessionId: original?.sessionId ?? "",
+                turnId: original?.turnId ?? "",
+                createdAt: original?.createdAt ?? new Date().toISOString(),
+            };
+        });
     }
     catch {
         return [];

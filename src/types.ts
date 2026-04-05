@@ -59,14 +59,6 @@ export interface Turn {
   files?: string[];
 }
 
-export interface CandidateMemory {
-  kind: MemoryKind;
-  title: string;
-  summary: string;
-  recallCue: string;
-  status?: TaskStatus;
-}
-
 export interface ProjectConfig {
   projectId: string;
   projectName: string;

@@ -1,10 +1,6 @@
 import type { Memory, ContextBundle } from "./types.js";
 import type kuzu from "kuzu";
-import { queryAll } from "./kuzu-helpers.js";
-
-function escape(s: string): string {
-  return (s ?? "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-}
+import { queryAll, escape } from "./kuzu-helpers.js";
 
 export async function assembleContext(
   projectId: string,
@@ -46,6 +42,21 @@ export async function assembleContext(
 }
 
 export function formatContextBundle(bundle: ContextBundle): string {
+  const isEmpty =
+    !bundle.activeTask &&
+    bundle.nextTasks.length === 0 &&
+    bundle.keyMemories.length === 0 &&
+    !bundle.sessionSummary;
+
+  if (isEmpty) {
+    return [
+      "## Project Memory Context",
+      "",
+      "No memories yet. Memories are extracted automatically at the end of each AI turn.",
+      "Run: project-memory config  to set your LLM and embedding models.",
+    ].join("\n");
+  }
+
   const lines: string[] = ["## Project Memory Context\n"];
 
   if (bundle.activeTask) {

@@ -39,6 +39,7 @@ const path = __importStar(require("path"));
 const crypto = __importStar(require("crypto"));
 const detect_project_js_1 = require("./detect-project.js");
 const db_js_1 = require("./db.js");
+const config_js_1 = require("./config.js");
 async function initProject(cwd) {
     const detected = (0, detect_project_js_1.detectProject)(cwd);
     if (!detected) {
@@ -46,29 +47,28 @@ async function initProject(cwd) {
     }
     const { repoRoot, remoteUrl, projectName } = detected;
     const projectMemoryDir = path.join(repoRoot, ".project-memory");
-    // Idempotent — check if already initialized
     const configPath = path.join(projectMemoryDir, "config.json");
+    // Idempotent — check if already initialized
     if (fs.existsSync(configPath)) {
         const existing = JSON.parse(fs.readFileSync(configPath, "utf-8"));
         console.log(`Already initialized: ${existing.projectName} (${existing.projectId})`);
         return;
     }
     // Create directory structure
-    const dirs = [
+    for (const dir of [
         projectMemoryDir,
         path.join(projectMemoryDir, "sessions"),
         path.join(projectMemoryDir, "candidates"),
         path.join(projectMemoryDir, "artifacts"),
         path.join(projectMemoryDir, "summaries"),
         path.join(projectMemoryDir, "queue"),
-    ];
-    for (const dir of dirs) {
+    ]) {
         fs.mkdirSync(dir, { recursive: true });
     }
     // Initialize Kuzu and apply schema
     const { conn } = (0, db_js_1.getDb)(projectMemoryDir);
     await (0, db_js_1.applySchema)(conn);
-    // Write config
+    // Write config with LLM defaults
     const projectId = `proj_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
     const config = {
         projectId,
@@ -76,6 +76,8 @@ async function initProject(cwd) {
         remoteUrl,
         repoPath: repoRoot,
         createdAt: new Date().toISOString(),
+        llm: { ...config_js_1.DEFAULT_LLM },
+        embedding: { ...config_js_1.DEFAULT_EMBEDDING },
     };
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
     // Create Project node in Kuzu
@@ -91,15 +93,52 @@ async function initProject(cwd) {
     const entry = ".project-memory/\n";
     if (fs.existsSync(gitignorePath)) {
         const contents = fs.readFileSync(gitignorePath, "utf-8");
-        if (!contents.includes(".project-memory")) {
+        if (!contents.includes(".project-memory"))
             fs.appendFileSync(gitignorePath, `\n${entry}`);
-        }
     }
     else {
         fs.writeFileSync(gitignorePath, entry);
     }
+    // Write .claude/settings.json with hook registrations
+    writeClaudeSettings(repoRoot);
     console.log(`Initialized project: ${projectName}`);
     console.log(`  ID:     ${projectId}`);
     console.log(`  Remote: ${remoteUrl}`);
     console.log(`  Path:   ${projectMemoryDir}`);
+    console.log(`  Hooks:  .claude/settings.json`);
+    console.log(`  Run "project-memory config" to set your LLM and embedding models.`);
+}
+function writeClaudeSettings(repoRoot) {
+    const claudeDir = path.join(repoRoot, ".claude");
+    const settingsPath = path.join(claudeDir, "settings.json");
+    fs.mkdirSync(claudeDir, { recursive: true });
+    // The hook commands use "project-memory hook <type>" — portable, no hardcoded paths.
+    // Requires project-memory to be on PATH (npm install -g project-memory).
+    const hookEntry = (type) => ({
+        matcher: "",
+        hooks: [{ type: "command", command: `project-memory hook ${type}` }],
+    });
+    let existing = {};
+    if (fs.existsSync(settingsPath)) {
+        try {
+            existing = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+        }
+        catch { /* ignore */ }
+    }
+    // Merge — don't overwrite other settings the project may already have
+    const hooks = existing["hooks"] ?? {};
+    const upsertHook = (event, type) => {
+        const entries = hooks[event] ?? [];
+        const cmd = `project-memory hook ${type}`;
+        const alreadyPresent = entries.some((e) => e.hooks?.some((h) => h.command === cmd));
+        if (!alreadyPresent)
+            entries.push(hookEntry(type));
+        hooks[event] = entries;
+    };
+    upsertHook("UserPromptSubmit", "user-prompt");
+    upsertHook("Stop", "stop");
+    upsertHook("PreCompact", "compact");
+    upsertHook("PostToolUse", "post-tool-use");
+    existing["hooks"] = hooks;
+    fs.writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
 }

@@ -33,49 +33,54 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.promoteMemories = promoteMemories;
+exports.promoteToDb = promoteToDb;
+exports.getExistingMemories = getExistingMemories;
 const crypto = __importStar(require("crypto"));
 const kuzu_helpers_js_1 = require("./kuzu-helpers.js");
-function escape(s) {
-    return (s ?? "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-}
-async function promoteMemories(candidates, sessionId, config, conn) {
+async function promoteToDb(candidates, projectId, conn) {
     const promoted = [];
-    for (const candidate of candidates) {
-        // Dedupe: check if a memory with the same title already exists
-        const rows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${escape(config.projectId)}'})
-       WHERE m.title = '${escape(candidate.title)}'
+    for (const c of candidates) {
+        // Dedupe by title
+        const existing = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}'})
+       WHERE m.title = '${(0, kuzu_helpers_js_1.escape)(c.title)}'
        RETURN m.id`);
-        if (rows.length > 0)
-            continue; // already known
+        if (existing.length > 0)
+            continue;
         const memory = {
             id: `mem_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
-            kind: candidate.kind,
-            title: candidate.title,
-            summary: candidate.summary,
-            recallCue: candidate.recallCue,
-            projectId: config.projectId,
-            sessionId,
+            kind: c.kind,
+            title: c.title,
+            summary: c.summary,
+            recallCue: c.recallCue,
+            projectId,
+            sessionId: c.sessionId,
             createdAt: new Date().toISOString(),
-            status: candidate.status ?? undefined,
-            artifactId: undefined,
+            status: c.status,
         };
         await conn.query(`CREATE (m:Memory {
-        id: '${escape(memory.id)}',
-        kind: '${escape(memory.kind)}',
-        title: '${escape(memory.title)}',
-        summary: '${escape(memory.summary)}',
-        recallCue: '${escape(memory.recallCue)}',
-        projectId: '${escape(memory.projectId)}',
-        sessionId: '${escape(memory.sessionId)}',
-        createdAt: '${escape(memory.createdAt)}',
-        status: '${escape(memory.status ?? "")}',
-        artifactId: '${escape(memory.artifactId ?? "")}'
+        id: '${(0, kuzu_helpers_js_1.escape)(memory.id)}',
+        kind: '${(0, kuzu_helpers_js_1.escape)(memory.kind)}',
+        title: '${(0, kuzu_helpers_js_1.escape)(memory.title)}',
+        summary: '${(0, kuzu_helpers_js_1.escape)(memory.summary)}',
+        recallCue: '${(0, kuzu_helpers_js_1.escape)(memory.recallCue)}',
+        projectId: '${(0, kuzu_helpers_js_1.escape)(memory.projectId)}',
+        sessionId: '${(0, kuzu_helpers_js_1.escape)(memory.sessionId)}',
+        createdAt: '${(0, kuzu_helpers_js_1.escape)(memory.createdAt)}',
+        status: '${(0, kuzu_helpers_js_1.escape)(memory.status ?? "")}',
+        artifactId: ''
       })`);
-        // Link memory to session
-        await conn.query(`MATCH (s:Session {id: '${escape(sessionId)}'}), (m:Memory {id: '${escape(memory.id)}'})
-       CREATE (s)-[:HAS_MEMORY]->(m)`);
+        // Link to session if it exists
+        const sessionRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (s:Session {id: '${(0, kuzu_helpers_js_1.escape)(c.sessionId)}'}) RETURN s`);
+        if (sessionRows.length > 0) {
+            await conn.query(`MATCH (s:Session {id: '${(0, kuzu_helpers_js_1.escape)(c.sessionId)}'}), (m:Memory {id: '${(0, kuzu_helpers_js_1.escape)(memory.id)}'})
+         CREATE (s)-[:HAS_MEMORY]->(m)`);
+        }
         promoted.push(memory);
     }
     return promoted;
+}
+async function getExistingMemories(projectId, conn) {
+    const rows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}'})
+     RETURN m ORDER BY m.createdAt DESC LIMIT 50`);
+    return rows.map((r) => r["m"]);
 }

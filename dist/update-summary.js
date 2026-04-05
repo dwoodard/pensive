@@ -52,11 +52,17 @@ function writeSummary(projectMemoryDir, sessionId, summary) {
     const summaryPath = getSummaryPath(projectMemoryDir, sessionId);
     fs.writeFileSync(summaryPath, summary);
 }
+function stripTags(text) {
+    return text
+        .replace(/<ide_opened_file>[\s\S]*?<\/ide_opened_file>/g, "")
+        .replace(/<ide_selection>[\s\S]*?<\/ide_selection>/g, "")
+        .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+}
 function buildUpdatedSummary(existingSummary, turn) {
-    // This is called after extract-memory with the LLM-generated summary update.
-    // For now, append a timestamped entry. The real update happens via the extraction prompt.
-    const userMsg = turn.messages.find((m) => m.role === "user")?.content ?? "";
-    const assistantMsg = turn.messages.find((m) => m.role === "assistant")?.content ?? "";
+    const userMsg = stripTags(turn.messages.find((m) => m.role === "user")?.content ?? "");
+    const assistantMsg = stripTags(turn.messages.find((m) => m.role === "assistant")?.content ?? "");
     const truncate = (s, n) => s.length > n ? s.slice(0, n) + "..." : s;
     const newEntry = [
         `[${turn.timestamp}]`,

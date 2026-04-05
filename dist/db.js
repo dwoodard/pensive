@@ -39,17 +39,21 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getDb = getDb;
 exports.applySchema = applySchema;
 const kuzu_1 = __importDefault(require("kuzu"));
+const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
-let _db = null;
-let _conn = null;
+const _cache = new Map();
 function getDb(projectMemoryDir) {
-    if (_db && _conn)
-        return { db: _db, conn: _conn };
-    const kuzuDir = path.join(projectMemoryDir, "kuzu");
-    // Kuzu creates the directory itself — do not pre-create it
-    _db = new kuzu_1.default.Database(kuzuDir);
-    _conn = new kuzu_1.default.Connection(_db);
-    return { db: _db, conn: _conn };
+    const cached = _cache.get(projectMemoryDir);
+    if (cached)
+        return cached;
+    // Explorer expects KUZU_DIR/database.kz — create the parent dir and use that filename
+    const graphDir = path.join(projectMemoryDir, "graph");
+    fs.mkdirSync(graphDir, { recursive: true });
+    const dbPath = path.join(graphDir, "database.kz");
+    const db = new kuzu_1.default.Database(dbPath);
+    const conn = new kuzu_1.default.Connection(db);
+    _cache.set(projectMemoryDir, { db, conn });
+    return { db, conn };
 }
 async function applySchema(conn) {
     const statements = [

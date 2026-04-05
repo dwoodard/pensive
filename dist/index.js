@@ -34,16 +34,16 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ingestTurn = ingestTurn;
-const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const detect_project_js_1 = require("./detect-project.js");
 const db_js_1 = require("./db.js");
 const kuzu_helpers_js_1 = require("./kuzu-helpers.js");
 const append_turn_js_1 = require("./append-turn.js");
+const update_summary_js_1 = require("./update-summary.js");
 const extract_memory_js_1 = require("./extract-memory.js");
 const promote_memory_js_1 = require("./promote-memory.js");
-const update_summary_js_1 = require("./update-summary.js");
-async function ingestTurn(turn, extractFn) {
+const config_js_1 = require("./config.js");
+async function ingestTurn(turn) {
     const detected = (0, detect_project_js_1.detectProject)(turn.cwd);
     if (!detected) {
         console.error("No git repo found at:", turn.cwd);
@@ -51,12 +51,14 @@ async function ingestTurn(turn, extractFn) {
     }
     const { repoRoot } = detected;
     const projectMemoryDir = path.join(repoRoot, ".project-memory");
-    const configPath = path.join(projectMemoryDir, "config.json");
-    if (!fs.existsSync(configPath)) {
+    let config;
+    try {
+        config = (0, config_js_1.readProjectConfig)(projectMemoryDir);
+    }
+    catch {
         console.error("Project not initialized. Run: project-memory init");
         return;
     }
-    const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     const { conn } = (0, db_js_1.getDb)(projectMemoryDir);
     // 1. Resolve session
     const sessionId = (0, append_turn_js_1.resolveSession)(turn, projectMemoryDir, config);
@@ -73,28 +75,27 @@ async function ingestTurn(turn, extractFn) {
        CREATE (p)-[:HAS_SESSION]->(s)`);
     }
     // 2. Append turn to session log
-    const turnId = (0, append_turn_js_1.appendTurn)(turn, projectMemoryDir, sessionId);
-    // 3. Read existing session summary
+    (0, append_turn_js_1.appendTurn)(turn, projectMemoryDir, sessionId);
+    // 3. Update rolling session summary
     const existingSummary = (0, update_summary_js_1.readSummary)(projectMemoryDir, sessionId);
-    // 4. Extract candidate memories (if extraction function provided)
-    if (extractFn) {
-        const prompt = (0, extract_memory_js_1.buildExtractionPrompt)(turn, existingSummary, config.projectName);
-        try {
-            const response = await extractFn(prompt);
-            const candidates = (0, extract_memory_js_1.parseCandidates)(response);
-            if (candidates.length > 0) {
-                (0, extract_memory_js_1.writeCandidates)(candidates, projectMemoryDir, sessionId, turnId);
-                const promoted = await (0, promote_memory_js_1.promoteMemories)(candidates, sessionId, config, conn);
-                if (promoted.length > 0) {
-                    console.log(`Promoted ${promoted.length} memory(s):`, promoted.map((m) => `[${m.kind}] ${m.title}`).join(", "));
-                }
-            }
-        }
-        catch (err) {
-            console.error("Memory extraction failed:", err);
-        }
-    }
-    // 5. Update rolling session summary
     const updatedSummary = (0, update_summary_js_1.buildUpdatedSummary)(existingSummary, turn);
     (0, update_summary_js_1.writeSummary)(projectMemoryDir, sessionId, updatedSummary);
+    // 4. Extract memories from the full turn (skip if LLM not configured)
+    if (!config.llm?.model || config.llm.model === "local-model")
+        return;
+    const userText = turn.messages.find((m) => m.role === "user")?.content ?? "";
+    const assistantText = turn.messages.find((m) => m.role === "assistant")?.content ?? "";
+    if (!userText)
+        return;
+    try {
+        const turnId = `turn_${sessionId.slice(0, 8)}_${Date.now()}`;
+        const candidates = await (0, extract_memory_js_1.extractFromTurn)(userText, assistantText, sessionId, turnId);
+        if (candidates.length === 0)
+            return;
+        (0, extract_memory_js_1.writeCandidateFile)(projectMemoryDir, candidates);
+        await (0, promote_memory_js_1.promoteToDb)(candidates, config.projectId, conn);
+    }
+    catch {
+        // Never block on extraction errors
+    }
 }

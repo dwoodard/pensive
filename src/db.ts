@@ -1,20 +1,27 @@
 import kuzu from "kuzu";
+import * as fs from "fs";
 import * as path from "path";
 
-let _db: InstanceType<typeof kuzu.Database> | null = null;
-let _conn: InstanceType<typeof kuzu.Connection> | null = null;
+const _cache = new Map<string, {
+  db: InstanceType<typeof kuzu.Database>;
+  conn: InstanceType<typeof kuzu.Connection>;
+}>();
 
 export function getDb(projectMemoryDir: string): {
   db: InstanceType<typeof kuzu.Database>;
   conn: InstanceType<typeof kuzu.Connection>;
 } {
-  if (_db && _conn) return { db: _db, conn: _conn };
+  const cached = _cache.get(projectMemoryDir);
+  if (cached) return cached;
 
-  const kuzuDir = path.join(projectMemoryDir, "kuzu");
-  // Kuzu creates the directory itself — do not pre-create it
-  _db = new kuzu.Database(kuzuDir);
-  _conn = new kuzu.Connection(_db);
-  return { db: _db, conn: _conn };
+  // Explorer expects KUZU_DIR/database.kz — create the parent dir and use that filename
+  const graphDir = path.join(projectMemoryDir, "graph");
+  fs.mkdirSync(graphDir, { recursive: true });
+  const dbPath = path.join(graphDir, "database.kz");
+  const db = new kuzu.Database(dbPath);
+  const conn = new kuzu.Connection(db);
+  _cache.set(projectMemoryDir, { db, conn });
+  return { db, conn };
 }
 
 export async function applySchema(

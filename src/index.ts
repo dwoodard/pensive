@@ -1,23 +1,15 @@
-import * as fs from "fs";
 import * as path from "path";
-import * as crypto from "crypto";
 import { detectProject } from "./detect-project.js";
 import { getDb } from "./db.js";
 import { queryAll } from "./kuzu-helpers.js";
 import { appendTurn, resolveSession } from "./append-turn.js";
-import {
-  buildExtractionPrompt,
-  parseCandidates,
-  writeCandidates,
-} from "./extract-memory.js";
-import { promoteMemories } from "./promote-memory.js";
 import { readSummary, writeSummary, buildUpdatedSummary } from "./update-summary.js";
-import type { Turn, ProjectConfig } from "./types.js";
+import { extractFromTurn, writeCandidateFile } from "./extract-memory.js";
+import { promoteToDb } from "./promote-memory.js";
+import { readProjectConfig } from "./config.js";
+import type { Turn } from "./types.js";
 
-export async function ingestTurn(
-  turn: Turn,
-  extractFn?: (prompt: string) => Promise<string>
-): Promise<void> {
+export async function ingestTurn(turn: Turn): Promise<void> {
   const detected = detectProject(turn.cwd);
   if (!detected) {
     console.error("No git repo found at:", turn.cwd);
@@ -26,16 +18,13 @@ export async function ingestTurn(
 
   const { repoRoot } = detected;
   const projectMemoryDir = path.join(repoRoot, ".project-memory");
-  const configPath = path.join(projectMemoryDir, "config.json");
-
-  if (!fs.existsSync(configPath)) {
-    console.error(
-      "Project not initialized. Run: project-memory init"
-    );
+  let config;
+  try {
+    config = readProjectConfig(projectMemoryDir);
+  } catch {
+    console.error("Project not initialized. Run: project-memory init");
     return;
   }
-
-  const config: ProjectConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
   const { conn } = getDb(projectMemoryDir);
 
   // 1. Resolve session
@@ -62,44 +51,28 @@ export async function ingestTurn(
   }
 
   // 2. Append turn to session log
-  const turnId = appendTurn(turn, projectMemoryDir, sessionId);
+  appendTurn(turn, projectMemoryDir, sessionId);
 
-  // 3. Read existing session summary
+  // 3. Update rolling session summary
   const existingSummary = readSummary(projectMemoryDir, sessionId);
-
-  // 4. Extract candidate memories (if extraction function provided)
-  if (extractFn) {
-    const prompt = buildExtractionPrompt(
-      turn,
-      existingSummary,
-      config.projectName
-    );
-
-    try {
-      const response = await extractFn(prompt);
-      const candidates = parseCandidates(response);
-
-      if (candidates.length > 0) {
-        writeCandidates(candidates, projectMemoryDir, sessionId, turnId);
-        const promoted = await promoteMemories(
-          candidates,
-          sessionId,
-          config,
-          conn
-        );
-        if (promoted.length > 0) {
-          console.log(
-            `Promoted ${promoted.length} memory(s):`,
-            promoted.map((m) => `[${m.kind}] ${m.title}`).join(", ")
-          );
-        }
-      }
-    } catch (err) {
-      console.error("Memory extraction failed:", err);
-    }
-  }
-
-  // 5. Update rolling session summary
   const updatedSummary = buildUpdatedSummary(existingSummary, turn);
   writeSummary(projectMemoryDir, sessionId, updatedSummary);
+
+  // 4. Extract memories from the full turn (skip if LLM not configured)
+  if (!config.llm?.model || config.llm.model === "local-model") return;
+
+  const userText = turn.messages.find((m) => m.role === "user")?.content ?? "";
+  const assistantText = turn.messages.find((m) => m.role === "assistant")?.content ?? "";
+  if (!userText) return;
+
+  try {
+    const turnId = `turn_${sessionId.slice(0, 8)}_${Date.now()}`;
+    const candidates = await extractFromTurn(userText, assistantText, sessionId, turnId);
+    if (candidates.length === 0) return;
+
+    writeCandidateFile(projectMemoryDir, candidates);
+    await promoteToDb(candidates, config.projectId, conn);
+  } catch {
+    // Never block on extraction errors
+  }
 }
