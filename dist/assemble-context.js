@@ -3,7 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.assembleContext = assembleContext;
 exports.formatContextBundle = formatContextBundle;
 const kuzu_helpers_js_1 = require("./kuzu-helpers.js");
-async function assembleContext(projectId, sessionSummary, conn) {
+const search_js_1 = require("./search.js");
+async function assembleContext(projectId, sessionSummary, conn, query) {
     // Get active task
     const activeRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (t:Task {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}', status: 'active'})
      RETURN t ORDER BY t.createdAt DESC LIMIT 1`);
@@ -12,17 +13,32 @@ async function assembleContext(projectId, sessionSummary, conn) {
     const pendingRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (t:Task {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}', status: 'pending'})
      RETURN t ORDER BY t.taskOrder ASC LIMIT 3`);
     const nextTasks = pendingRows.map((r) => r["t"]);
-    // Get key memories — decisions first, then questions, then facts
-    const memoriesRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}'})
-     WHERE m.kind IN ['decision', 'question', 'fact', 'summary']
-     RETURN m ORDER BY m.createdAt DESC LIMIT 5`);
-    const keyMemories = memoriesRows.map((r) => r["m"]);
+    // Get key memories — semantic search if query provided, otherwise recency
+    let keyMemories;
+    if (query) {
+        try {
+            keyMemories = await (0, search_js_1.searchMemories)(conn, projectId, query, 5);
+        }
+        catch {
+            // Fall back to recency if embedding fails
+            keyMemories = await recencyMemories(conn, projectId);
+        }
+    }
+    else {
+        keyMemories = await recencyMemories(conn, projectId);
+    }
     return {
         activeTask,
         nextTasks,
         keyMemories,
         sessionSummary,
     };
+}
+async function recencyMemories(conn, projectId) {
+    const rows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (m:Memory {projectId: '${(0, kuzu_helpers_js_1.escape)(projectId)}'})
+     WHERE m.kind IN ['decision', 'question', 'fact', 'summary']
+     RETURN m ORDER BY m.createdAt DESC LIMIT 5`);
+    return rows.map((r) => r["m"]);
 }
 function formatContextBundle(bundle) {
     const isEmpty = !bundle.activeTask &&

@@ -47,6 +47,7 @@ const db_js_1 = require("./db.js");
 const kuzu_helpers_js_1 = require("./kuzu-helpers.js");
 const config_js_1 = require("./config.js");
 const llm_js_1 = require("./llm.js");
+const search_js_1 = require("./search.js");
 const program = new commander_1.Command();
 program
     .name("project-memory")
@@ -163,6 +164,51 @@ program
     }
     catch {
         // DB not yet initialized — skip stats
+    }
+});
+program
+    .command("search <query>")
+    .description("Semantic search across memories, with graph context")
+    .option("-k, --top <n>", "Number of results", "5")
+    .action(async (query, opts) => {
+    const detected = (0, detect_project_js_1.detectProject)(process.cwd());
+    if (!detected) {
+        console.error("Not in a git repository.");
+        process.exit(1);
+    }
+    const projectMemoryDir = path.join(detected.repoRoot, ".project-memory");
+    const config = (0, config_js_1.readProjectConfig)(projectMemoryDir);
+    const { conn } = (0, db_js_1.getDb)(projectMemoryDir);
+    const topK = parseInt(opts.top ?? "5", 10);
+    const results = await (0, search_js_1.searchMemories)(conn, config.projectId, query, topK);
+    if (results.length === 0) {
+        console.log("No memories found.");
+        return;
+    }
+    console.log(`\nQuery: "${query}"\n`);
+    for (const m of results) {
+        console.log(`── [${m.kind.toUpperCase()}] ${m.title}  (score: ${m.score.toFixed(4)})`);
+        console.log(`   ${m.summary}`);
+        // Parent session
+        const sessRows = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (s:Session)-[:HAS_MEMORY]->(m:Memory {id: '${m.id}'})
+         RETURN s.title AS title, s.summary AS summary`);
+        if (sessRows.length > 0) {
+            const s = sessRows[0];
+            const title = String(s.title || "untitled session");
+            const snippet = String(s.summary ?? "").slice(0, 120);
+            console.log(`\n   Session: ${title}`);
+            if (snippet)
+                console.log(`   ${snippet}${s.summary && String(s.summary).length > 120 ? "…" : ""}`);
+        }
+        // Sibling memories in same session
+        const siblings = await (0, kuzu_helpers_js_1.queryAll)(conn, `MATCH (s:Session {id: '${m.sessionId}'})-[:HAS_MEMORY]->(sib:Memory)
+         WHERE sib.id <> '${m.id}'
+         RETURN sib.kind AS kind, sib.title AS title`);
+        if (siblings.length > 0) {
+            console.log(`\n   Also from this session:`);
+            siblings.forEach((s) => console.log(`     [${s.kind}] ${s.title}`));
+        }
+        console.log();
     }
 });
 program

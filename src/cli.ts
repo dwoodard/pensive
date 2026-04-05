@@ -17,6 +17,7 @@ import {
   type ProjectConfig,
 } from "./config.js";
 import { embed } from "./llm.js";
+import { searchMemories } from "./search.js";
 import type { Turn } from "./types.js";
 
 const program = new Command();
@@ -159,6 +160,60 @@ program
       console.log(`  Last:      ${lastActivity}`);
     } catch {
       // DB not yet initialized — skip stats
+    }
+  });
+
+program
+  .command("search <query>")
+  .description("Semantic search across memories, with graph context")
+  .option("-k, --top <n>", "Number of results", "5")
+  .action(async (query: string, opts) => {
+    const detected = detectProject(process.cwd());
+    if (!detected) { console.error("Not in a git repository."); process.exit(1); }
+
+    const projectMemoryDir = path.join(detected.repoRoot, ".project-memory");
+    const config = readProjectConfig(projectMemoryDir);
+    const { conn } = getDb(projectMemoryDir);
+
+    const topK = parseInt(opts.top ?? "5", 10);
+    const results = await searchMemories(conn, config.projectId, query, topK);
+
+    if (results.length === 0) {
+      console.log("No memories found.");
+      return;
+    }
+
+    console.log(`\nQuery: "${query}"\n`);
+
+    for (const m of results) {
+      console.log(`── [${m.kind.toUpperCase()}] ${m.title}  (score: ${m.score.toFixed(4)})`);
+      console.log(`   ${m.summary}`);
+
+      // Parent session
+      const sessRows = await queryAll(conn,
+        `MATCH (s:Session)-[:HAS_MEMORY]->(m:Memory {id: '${m.id}'})
+         RETURN s.title AS title, s.summary AS summary`
+      );
+      if (sessRows.length > 0) {
+        const s = sessRows[0];
+        const title = String(s.title || "untitled session");
+        const snippet = String(s.summary ?? "").slice(0, 120);
+        console.log(`\n   Session: ${title}`);
+        if (snippet) console.log(`   ${snippet}${s.summary && String(s.summary).length > 120 ? "…" : ""}`);
+      }
+
+      // Sibling memories in same session
+      const siblings = await queryAll(conn,
+        `MATCH (s:Session {id: '${m.sessionId}'})-[:HAS_MEMORY]->(sib:Memory)
+         WHERE sib.id <> '${m.id}'
+         RETURN sib.kind AS kind, sib.title AS title`
+      );
+      if (siblings.length > 0) {
+        console.log(`\n   Also from this session:`);
+        siblings.forEach((s) => console.log(`     [${s.kind}] ${s.title}`));
+      }
+
+      console.log();
     }
   });
 

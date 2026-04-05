@@ -1,11 +1,13 @@
 import type { Memory, Task, ContextBundle } from "./types.js";
 import type kuzu from "kuzu";
 import { queryAll, escape } from "./kuzu-helpers.js";
+import { searchMemories } from "./search.js";
 
 export async function assembleContext(
   projectId: string,
   sessionSummary: string,
-  conn: InstanceType<typeof kuzu.Connection>
+  conn: InstanceType<typeof kuzu.Connection>,
+  query?: string
 ): Promise<ContextBundle> {
   // Get active task
   const activeRows = await queryAll(
@@ -24,14 +26,18 @@ export async function assembleContext(
   );
   const nextTasks: Task[] = pendingRows.map((r) => r["t"] as Task);
 
-  // Get key memories — decisions first, then questions, then facts
-  const memoriesRows = await queryAll(
-    conn,
-    `MATCH (m:Memory {projectId: '${escape(projectId)}'})
-     WHERE m.kind IN ['decision', 'question', 'fact', 'summary']
-     RETURN m ORDER BY m.createdAt DESC LIMIT 5`
-  );
-  const keyMemories: Memory[] = memoriesRows.map((r) => r["m"] as Memory);
+  // Get key memories — semantic search if query provided, otherwise recency
+  let keyMemories: Memory[];
+  if (query) {
+    try {
+      keyMemories = await searchMemories(conn, projectId, query, 5);
+    } catch {
+      // Fall back to recency if embedding fails
+      keyMemories = await recencyMemories(conn, projectId);
+    }
+  } else {
+    keyMemories = await recencyMemories(conn, projectId);
+  }
 
   return {
     activeTask,
@@ -39,6 +45,19 @@ export async function assembleContext(
     keyMemories,
     sessionSummary,
   };
+}
+
+async function recencyMemories(
+  conn: InstanceType<typeof kuzu.Connection>,
+  projectId: string
+): Promise<Memory[]> {
+  const rows = await queryAll(
+    conn,
+    `MATCH (m:Memory {projectId: '${escape(projectId)}'})
+     WHERE m.kind IN ['decision', 'question', 'fact', 'summary']
+     RETURN m ORDER BY m.createdAt DESC LIMIT 5`
+  );
+  return rows.map((r) => r["m"] as Memory);
 }
 
 export function formatContextBundle(bundle: ContextBundle): string {
