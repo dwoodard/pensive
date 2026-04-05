@@ -7,7 +7,6 @@
  */
 
 import * as fs from "fs";
-import * as path from "path";
 import * as crypto from "crypto";
 import { findProjectMemoryDir } from "./hook-utils.js";
 import { extractFromUserMessage, writeCandidateFile } from "./extract-memory.js";
@@ -70,14 +69,7 @@ async function main(): Promise<void> {
     const { conn } = getDb(projectMemoryDir);
     const promoted = await promoteToDb(candidates, config.projectId, conn);
 
-    if (promoted.length > 0) {
-      const labels = promoted.map((m) => `[${m.kind}] ${m.title}`).join(", ");
-      // Write to debug log so we can see what was captured
-      const debugDir = path.join(projectMemoryDir, "debug", sessionId);
-      fs.mkdirSync(debugDir, { recursive: true });
-      const logPath = path.join(debugDir, "user-prompt-memories.log");
-      fs.appendFileSync(logPath, `${new Date().toISOString()} → ${labels}\n`);
-    }
+    // promoted memories are persisted to Kuzu; no additional logging needed
   } catch {
     // Never block Claude
   }

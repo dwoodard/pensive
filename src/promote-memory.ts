@@ -21,6 +21,30 @@ export async function promoteToDb(
     );
     if (existing.length > 0) continue;
 
+    // Tasks default to pending; enforce only-one-active
+    let status = c.status;
+    let taskOrder = 0;
+    if (c.kind === "task") {
+      if (!status) status = "pending";
+      if (status === "active") {
+        // Demote any currently active task to pending
+        await conn.query(
+          `MATCH (m:Memory {projectId: '${escape(projectId)}', kind: 'task', status: 'active'})
+           SET m.status = 'pending'`
+        );
+      }
+      if (status === "pending") {
+        // Assign next order position
+        const orderRows = await queryAll(
+          conn,
+          `MATCH (m:Memory {projectId: '${escape(projectId)}', kind: 'task', status: 'pending'})
+           RETURN max(m.taskOrder) AS maxOrder`
+        );
+        const maxOrder = Number(orderRows[0]?.["maxOrder"] ?? 0);
+        taskOrder = maxOrder + 1;
+      }
+    }
+
     const memory: Memory = {
       id: `mem_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
       kind: c.kind,
@@ -30,7 +54,8 @@ export async function promoteToDb(
       projectId,
       sessionId: c.sessionId,
       createdAt: new Date().toISOString(),
-      status: c.status,
+      status,
+      taskOrder,
     };
 
     await conn.query(
@@ -44,6 +69,7 @@ export async function promoteToDb(
         sessionId: '${escape(memory.sessionId)}',
         createdAt: '${escape(memory.createdAt)}',
         status: '${escape(memory.status ?? "")}',
+        taskOrder: ${memory.taskOrder ?? 0},
         artifactId: ''
       })`
     );

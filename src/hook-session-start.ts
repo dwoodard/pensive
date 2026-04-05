@@ -48,16 +48,20 @@ function buildBundle(
     remaining -= safe.length + 1; // +1 for newline
   };
 
-  if (activeTask) {
-    push(`## Active Task`);
-    push(`${activeTask.title}`);
-    if (activeTask.summary) push(activeTask.summary);
-    push("");
-  }
+  const hasTasks = activeTask !== null || pending.length > 0;
 
-  if (pending.length > 0) {
-    push(`## Pending Tasks`);
-    for (const t of pending) push(`- ${t.title}`);
+  if (hasTasks) {
+    push(`## Tasks`);
+    if (activeTask) {
+      push(`ACTIVE: ${activeTask.title}`);
+      if (activeTask.summary) push(activeTask.summary);
+    }
+    if (pending.length > 0) {
+      push(`Queue:`);
+      pending.forEach((t, i) => push(`  ${i + 1}. ${t.title}`));
+    }
+    push(`CLI: project-memory tasks | tasks add "..." | tasks done | tasks start <n>`);
+    push(`Work the active task. When done run: project-memory tasks done`);
     push("");
   }
 
@@ -104,7 +108,7 @@ async function main(): Promise<void> {
     );
     const pendingRows = await queryAll(conn,
       `MATCH (m:Memory {projectId: '${pid}', kind: 'task', status: 'pending'})
-       RETURN m ORDER BY m.createdAt ASC LIMIT 3`
+       RETURN m ORDER BY m.taskOrder ASC LIMIT 3`
     );
     const decisionRows = await queryAll(conn,
       `MATCH (m:Memory {projectId: '${pid}', kind: 'decision'})

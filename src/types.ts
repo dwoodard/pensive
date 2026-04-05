@@ -32,7 +32,8 @@ export interface Memory {
   projectId: string;
   sessionId: string;
   createdAt: string;
-  status?: TaskStatus; // only for kind=task
+  status?: TaskStatus;   // only for kind=task
+  taskOrder?: number;    // only for kind=task, pending queue ordering
   artifactId?: string;
 }
 

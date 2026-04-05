@@ -7,7 +7,6 @@
  */
 
 import * as fs from "fs";
-import * as path from "path";
 import { findProjectMemoryDir } from "./hook-utils.js";
 import { readAllCandidates, reviewCandidates, clearCandidates } from "./extract-memory.js";
 import { promoteToDb, getExistingMemories } from "./promote-memory.js";
@@ -56,21 +55,7 @@ async function main(): Promise<void> {
     const reviewed = await reviewCandidates(candidates, existing, config.projectName);
 
     if (reviewed.length > 0) {
-      const promoted = await promoteToDb(reviewed, config.projectId, conn);
-
-      // Log results
-      const debugDir = path.join(projectMemoryDir, "debug", payload.session_id);
-      fs.mkdirSync(debugDir, { recursive: true });
-      const logPath = path.join(debugDir, "compact-review.log");
-      const lines = [
-        `=== Compact Review: ${new Date().toISOString()} ===`,
-        `Candidates reviewed: ${candidates.length}`,
-        `Promoted: ${promoted.length}`,
-        ...promoted.map((m) => `  + [${m.kind}] ${m.title}`),
-        `Discarded: ${candidates.length - reviewed.length}`,
-        "",
-      ];
-      fs.appendFileSync(logPath, lines.join("\n"));
+      await promoteToDb(reviewed, config.projectId, conn);
     }
 
     // Clear candidates now that they've been reviewed

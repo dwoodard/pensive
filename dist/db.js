@@ -82,6 +82,7 @@ async function applySchema(conn) {
       sessionId STRING,
       createdAt STRING,
       status STRING,
+      taskOrder INT64,
       artifactId STRING,
       PRIMARY KEY (id)
     )`,
@@ -105,5 +106,12 @@ async function applySchema(conn) {
     ];
     for (const stmt of statements) {
         await conn.query(stmt);
+    }
+    // Migrations for existing databases
+    try {
+        await conn.query(`ALTER TABLE Memory ADD taskOrder INT64 DEFAULT 0`);
+    }
+    catch {
+        // Column already exists — safe to ignore
     }
 }

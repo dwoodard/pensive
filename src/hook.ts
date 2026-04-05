@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 /**
  * Claude Code Stop hook.
- * Extracts the last turn from the transcript, writes a debug log,
- * and runs the full ingest pipeline (turn log + memory extraction).
+ * Extracts the last turn from the transcript and runs the full ingest pipeline
+ * (turn log + memory extraction).
  */
 
 import * as fs from "fs";
-import * as path from "path";
 import { ingestTurn } from "./index.js";
 import { findProjectMemoryDir } from "./hook-utils.js";
 import type { Turn } from "./types.js";
@@ -59,34 +58,6 @@ function extractText(content: TranscriptEntry["message"]["content"]): string {
   );
 }
 
-function writeDebugLog(
-  projectMemoryDir: string,
-  sessionId: string,
-  timestamp: string,
-  promptId: string | null,
-  cwd: string,
-  userText: string,
-  assistantText: string
-): void {
-  const debugDir = path.join(projectMemoryDir, "debug", sessionId);
-  fs.mkdirSync(debugDir, { recursive: true });
-  const safe = timestamp.replace(/[:.]/g, "-");
-  const outPath = path.join(debugDir, `${safe}.txt`);
-  const output = [
-    `=== Turn: ${timestamp} ===`,
-    `Session:   ${sessionId}`,
-    `CWD:       ${cwd}`,
-    `PromptID:  ${promptId}`,
-    ``,
-    `--- USER ---`,
-    userText,
-    ``,
-    `--- ASSISTANT ---`,
-    assistantText || "(no text response)",
-    ``,
-  ].join("\n");
-  fs.writeFileSync(outPath, output);
-}
 
 async function main(): Promise<void> {
   let raw: string;
@@ -155,17 +126,6 @@ async function main(): Promise<void> {
 
     const projectMemoryDir = findProjectMemoryDir(cwd);
     if (!projectMemoryDir) process.exit(0);
-
-    // Always write debug log
-    writeDebugLog(
-      projectMemoryDir,
-      sessionId,
-      timestamp,
-      lastPromptId,
-      cwd,
-      userText,
-      assistantText
-    );
 
     // Run full ingest pipeline with LLM extraction
     const turn: Turn = {
