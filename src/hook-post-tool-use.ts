@@ -129,7 +129,7 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  // Only care about Write tool
+  // Only care about Write tool (both new files and overwrites — recordArtifact dedupes by location)
   if (payload.tool_name !== "Write") process.exit(0);
 
   const filePath = payload.tool_input?.file_path;
@@ -147,9 +147,6 @@ async function main(): Promise<void> {
     if (!projectMemoryDir) process.exit(0);
 
     const repoRoot = path.dirname(projectMemoryDir);
-
-    // Skip edits to files already known to git — only capture newly created files
-    if (isGitTracked(filePath, repoRoot)) process.exit(0);
 
     const config = readProjectConfig(projectMemoryDir);
     const { conn } = getDb(projectMemoryDir);
