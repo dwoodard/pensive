@@ -72,19 +72,20 @@ export async function initProject(cwd: string): Promise<void> {
     fs.writeFileSync(gitignorePath, entry);
   }
 
-  // Write .claude/settings.json with hook registrations
-  writeClaudeSettings(repoRoot);
+  // Write hook registrations to both .claude/ and .github/
+  writeHookSettings(repoRoot, ".claude");
+  writeHookSettings(repoRoot, ".github");
 
   console.log(`Initialized project: ${projectName}`);
   console.log(`  ID:     ${projectId}`);
   console.log(`  Remote: ${remoteUrl}`);
   console.log(`  Path:   ${projectMemoryDir}`);
-  console.log(`  Hooks:  .claude/settings.json`);
+  console.log(`  Hooks:  .claude/settings.json, .github/settings.json`);
   console.log(`  Run "pensive config" to set your LLM and embedding models.`);
 }
 
-function writeClaudeSettings(repoRoot: string): void {
-  const claudeDir = path.join(repoRoot, ".claude");
+function writeHookSettings(repoRoot: string, dir: ".claude" | ".github"): void {
+  const claudeDir = path.join(repoRoot, dir);
   const settingsPath = path.join(claudeDir, "settings.json");
   fs.mkdirSync(claudeDir, { recursive: true });
 
