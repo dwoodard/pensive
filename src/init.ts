@@ -75,52 +75,76 @@ export async function initProject(cwd: string): Promise<void> {
     }
   }
 
-  // Write hook registrations to both .claude/ and .github/
-  writeHookSettings(repoRoot, ".claude");
-  writeHookSettings(repoRoot, ".github");
+  // Write hook registrations
+  writeClaudeSettings(projectRoot);
+  writeGithubHooks(projectRoot);
 
   console.log(`Initialized project: ${projectName}`);
   console.log(`  ID:     ${projectId}`);
   console.log(`  Remote: ${remoteUrl}`);
   console.log(`  Path:   ${projectMemoryDir}`);
-  console.log(`  Hooks:  .claude/settings.json, .github/settings.json`);
+  console.log(`  Hooks:  .claude/settings.json, .github/hooks/pensive.json`);
   console.log(`  Run "pensive config" to set your LLM and embedding models.`);
 }
 
-function writeHookSettings(repoRoot: string, dir: ".claude" | ".github"): void {
-  const claudeDir = path.join(repoRoot, dir);
+const HOOK_EVENTS: Array<[event: string, type: string]> = [
+  ["SessionStart",     "session-start"],
+  ["UserPromptSubmit", "user-prompt"],
+  ["Stop",             "stop"],
+  ["PreCompact",       "compact"],
+  ["PostToolUse",      "post-tool-use"],
+];
+
+/** .claude/settings.json — nested format expected by Claude Code */
+function writeClaudeSettings(projectRoot: string): void {
+  const claudeDir = path.join(projectRoot, ".claude");
   const settingsPath = path.join(claudeDir, "settings.json");
   fs.mkdirSync(claudeDir, { recursive: true });
-
-  // The hook commands use "pensive hook <type>" — portable, no hardcoded paths.
-  // Requires pensive to be on PATH (npm install -g pensive).
-  const hookEntry = (type: string) => ({
-    matcher: "",
-    hooks: [{ type: "command", command: `pensive hook ${type}` }],
-  });
 
   let existing: Record<string, unknown> = {};
   if (fs.existsSync(settingsPath)) {
     try { existing = JSON.parse(fs.readFileSync(settingsPath, "utf-8")); } catch { /* ignore */ }
   }
 
-  // Merge — don't overwrite other settings the project may already have
   const hooks = (existing["hooks"] as Record<string, unknown[]> | undefined) ?? {};
 
-  const upsertHook = (event: string, type: string) => {
-    const entries = (hooks[event] as Array<{ hooks: Array<{ command: string }> }> | undefined) ?? [];
+  for (const [event, type] of HOOK_EVENTS) {
     const cmd = `pensive hook ${type}`;
+    const entries = (hooks[event] as Array<{ hooks: Array<{ command: string }> }> | undefined) ?? [];
     const alreadyPresent = entries.some((e) => e.hooks?.some((h) => h.command === cmd));
-    if (!alreadyPresent) entries.push(hookEntry(type));
+    if (!alreadyPresent) {
+      entries.push({ matcher: "", hooks: [{ type: "command", command: cmd }] });
+    }
     hooks[event] = entries;
-  };
-
-  upsertHook("SessionStart",     "session-start");
-  upsertHook("UserPromptSubmit", "user-prompt");
-  upsertHook("Stop",             "stop");
-  upsertHook("PreCompact",       "compact");
-  upsertHook("PostToolUse",      "post-tool-use");
+  }
 
   existing["hooks"] = hooks;
   fs.writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
+}
+
+/** .github/hooks/pensive.json — flat format */
+function writeGithubHooks(projectRoot: string): void {
+  const hooksDir = path.join(projectRoot, ".github", "hooks");
+  const pensivePath = path.join(hooksDir, "pensive.json");
+  fs.mkdirSync(hooksDir, { recursive: true });
+
+  let existing: Record<string, unknown> = {};
+  if (fs.existsSync(pensivePath)) {
+    try { existing = JSON.parse(fs.readFileSync(pensivePath, "utf-8")); } catch { /* ignore */ }
+  }
+
+  const hooks = (existing["hooks"] as Record<string, unknown[]> | undefined) ?? {};
+
+  for (const [event, type] of HOOK_EVENTS) {
+    const cmd = `pensive hook ${type}`;
+    const entries = (hooks[event] as Array<Record<string, string>> | undefined) ?? [];
+    const alreadyPresent = entries.some((e) => e["command"] === cmd);
+    if (!alreadyPresent) {
+      entries.push({ matcher: "", type: "command", command: cmd });
+    }
+    hooks[event] = entries;
+  }
+
+  existing["hooks"] = hooks;
+  fs.writeFileSync(pensivePath, JSON.stringify(existing, null, 2));
 }
