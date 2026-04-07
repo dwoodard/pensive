@@ -1,10 +1,8 @@
 # pensive
 
-**Persistent, structured memory for AI-assisted coding sessions.**
+**pensive** gives your AI coding assistant memory that persists across sessions.
 
-Claude forgets everything when a session ends. pensive fixes that — it automatically captures decisions, tasks, facts, and open questions during your coding sessions and resurfaces them exactly when you need them.
-
-No more re-explaining context. No more lost decisions. Your AI assistant picks up where you left off.
+It hooks into Claude Code's lifecycle to automatically extract decisions, tasks, facts, and open questions from each turn — storing them as typed nodes in a local graph database scoped to your repo. Every new session opens with a context bundle already injected: your active task, queued work, and a summary of the last session. No re-explaining. No lost decisions. Your assistant picks up where you left off.
 
 ---
 

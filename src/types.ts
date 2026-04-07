@@ -14,6 +14,7 @@ export interface Project {
   remoteUrl: string;
   repoPath: string;
   createdAt: string;
+  description?: string;
 }
 
 export interface Session {

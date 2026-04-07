@@ -450,6 +450,66 @@ program
     console.log(`  Embedding: ${chalk.white(embProvider)} / ${chalk.dim(embModel)}`);
   });
 
+// ── Project ──────────────────────────────────────────────────────────────────
+
+const projectCmd = program
+  .command("project")
+  .description("View or update this project's description");
+
+projectCmd
+  .action(async () => {
+    const { config, conn } = await getProjectDb(process.cwd());
+    const pid = config.projectId;
+
+    const rows = await queryAll(conn, `MATCH (p:Project {id: '${pid}'}) RETURN p`);
+    const p = rows[0]?.["p"] as Record<string, unknown> | undefined;
+
+    console.log(`\n${chalk.bold.cyan("── Project ──────────────────────────────")}`);
+    console.log(`  Name:    ${chalk.white(config.projectName)}`);
+    console.log(`  ID:      ${chalk.dim(pid)}`);
+    if (config.remoteUrl) console.log(`  Remote:  ${chalk.dim(config.remoteUrl)}`);
+    console.log(`  Path:    ${chalk.dim(config.repoPath)}`);
+
+    const description = p?.["description"] ? String(p["description"]) : "";
+    if (description) {
+      console.log(`\n${chalk.bold.cyan("── Description ──────────────────────────")}`);
+      console.log(description);
+    } else {
+      console.log(chalk.dim("\n  No description yet. Set one with: pensive project set description \"...\""));
+    }
+    console.log("");
+  });
+
+projectCmd
+  .command("set <field> <value>")
+  .description("Set a project field: name, remoteUrl, description")
+  .action(async (field: string, value: string) => {
+    const { config, conn } = await getProjectDb(process.cwd());
+    const { escape: esc } = await import("./kuzu-helpers.js");
+    const pid = config.projectId;
+
+    const allowed = ["name", "remoteUrl", "description"];
+    if (!allowed.includes(field)) {
+      cerr(`Unknown field "${field}". Allowed: ${allowed.join(", ")}`);
+      process.exit(1);
+    }
+
+    await conn.query(
+      `MATCH (p:Project {id: '${esc(pid)}'}) SET p.${field} = '${esc(value)}'`
+    );
+
+    // Keep config.json in sync for name/remoteUrl
+    if (field === "name") {
+      config.projectName = value;
+      writeProjectConfig(path.join(detectProject(process.cwd())!.projectRoot, ".pensive"), config);
+    } else if (field === "remoteUrl") {
+      config.remoteUrl = value;
+      writeProjectConfig(path.join(detectProject(process.cwd())!.projectRoot, ".pensive"), config);
+    }
+
+    console.log(`${chalk.green("Set")} ${chalk.white(field)}: ${value}`);
+  });
+
 // ── Tasks ────────────────────────────────────────────────────────────────────
 
 async function getProjectDb(cwd: string) {

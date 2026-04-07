@@ -6,8 +6,14 @@
  */
 
 import * as fs from "fs";
+import * as path from "path";
 import { ingestTurn } from "./index.js";
 import { findProjectMemoryDir } from "./hook-utils.js";
+import { getDb, applySchema } from "./db.js";
+import { readProjectConfig } from "./config.js";
+import { llmComplete } from "./llm.js";
+import { queryAll } from "./kuzu-helpers.js";
+import { escape as esc } from "./kuzu-helpers.js";
 import type { Turn } from "./types.js";
 
 interface HookPayload {
@@ -142,6 +148,46 @@ async function main(): Promise<void> {
 
     // No LLM extraction — just log the turn and update the rolling summary
     await ingestTurn(turn);
+
+    // Optionally update project description based on what happened this session
+    try {
+      const projectMemoryDir2 = findProjectMemoryDir(cwd);
+      if (projectMemoryDir2) {
+        const config = readProjectConfig(projectMemoryDir2);
+        const { conn: conn2 } = getDb(projectMemoryDir2);
+        await applySchema(conn2);
+        const pid = config.projectId;
+
+        const rows = await queryAll(conn2, `MATCH (p:Project {id: '${pid}'}) RETURN p`);
+        const p = rows[0]?.["p"] as Record<string, unknown> | undefined;
+        const current = p?.["description"] ? String(p["description"]) : "";
+
+        const prompt = `You are maintaining a living project description for a software project called "${config.projectName}".
+
+Current description:
+${current || "(none yet)"}
+
+What just happened in this session (user message):
+${userText.slice(0, 800)}
+
+Assistant response summary:
+${assistantText.slice(0, 800)}
+
+Task: Should the project description be updated based on this session? If yes, write a concise updated description (2-5 sentences) that captures what this project is, what it does, and any key characteristics. If no update is needed, respond with exactly: NO_UPDATE
+
+Respond with either the new description text, or NO_UPDATE.`;
+
+        const result = await llmComplete(prompt);
+        const trimmed = result.trim();
+        if (trimmed && trimmed !== "NO_UPDATE" && trimmed.length > 10) {
+          await conn2.query(
+            `MATCH (p:Project {id: '${esc(pid)}'}) SET p.description = '${esc(trimmed)}'`
+          );
+        }
+      }
+    } catch {
+      // Never block Claude on description update errors
+    }
   } catch {
     // Never block Claude on hook errors
   }
