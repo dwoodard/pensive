@@ -129,7 +129,7 @@ program
     console.log(chalk.bold.cyan(`── Project ──────────────────────────────`));
     console.log(`  Name:      ${chalk.white(config.projectName)}`);
     console.log(`  ID:        ${chalk.dim(config.projectId)}`);
-    console.log(`  Remote:    ${chalk.dim(config.remoteUrl)}`);
+    if (config.remoteUrl) console.log(`  Remote:    ${chalk.dim(config.remoteUrl)}`);
     console.log(`  Path:      ${chalk.dim(projectMemoryDir)}`);
     console.log(`  LLM:       ${config.llm?.provider ?? "not set"} / ${config.llm?.model ?? "not set"}`);
     console.log(`  Embedding: ${config.embedding?.provider ?? "not set"} / ${config.embedding?.model ?? "not set"}`);
