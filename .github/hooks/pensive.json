@@ -1,0 +1,39 @@
+{
+  "hooks": {
+    "session-start": [
+      {
+        "matcher": "",
+        "type": "command",
+        "command": "pensive hook session-start"
+      }
+    ],
+    "user-prompt": [
+      {
+        "matcher": "",
+        "type": "command",
+        "command": "pensive hook user-prompt"
+      }
+    ],
+    "stop": [
+      {
+        "matcher": "",
+        "type": "command",
+        "command": "pensive hook stop"
+      }
+    ],
+    "compact": [
+      {
+        "matcher": "",
+        "type": "command",
+        "command": "pensive hook compact"
+      }
+    ],
+    "post-tool-use": [
+      {
+        "matcher": "",
+        "type": "command",
+        "command": "pensive hook post-tool-use"
+      }
+    ]
+  }
+}
