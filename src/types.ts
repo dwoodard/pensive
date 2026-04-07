@@ -71,9 +71,15 @@ export interface Turn {
   files?: string[];
 }
 
+export interface ScoredMemory extends Memory {
+  score: number;
+  sessionTitle?: string;
+  sessionSummary?: string;
+}
+
 export interface ContextBundle {
   activeTask: Task | null;
   nextTasks: Task[];
-  keyMemories: Memory[];
+  keyMemories: ScoredMemory[];
   sessionSummary: string;
 }

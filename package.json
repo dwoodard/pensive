@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "test": "tsx src/test-graph-walk.ts",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js --help",
     "explore": "node dist/cli.js explore",

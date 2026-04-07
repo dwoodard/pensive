@@ -1,9 +1,38 @@
 import * as crypto from "crypto";
 import { queryAll, escape } from "./kuzu-helpers.js";
 import { embed } from "./llm.js";
+import { cosineSimilarity } from "./search.js";
 import type { Memory, Task } from "./types.js";
 import type { CandidateMemory } from "./extract-memory.js";
 import type kuzu from "kuzu";
+
+const RELATED_THRESHOLD = 0.82; // minimum cosine similarity to create a RELATED_TO edge
+
+async function linkRelatedMemories(
+  memory: Memory & { embedding: number[] },
+  projectId: string,
+  conn: InstanceType<typeof kuzu.Connection>
+): Promise<void> {
+  if (memory.embedding.length === 0) return;
+
+  const rows = await queryAll(
+    conn,
+    `MATCH (m:Memory {projectId: '${escape(projectId)}'})
+     WHERE m.id <> '${escape(memory.id)}' AND size(m.embedding) > 0
+     RETURN m`
+  );
+
+  for (const row of rows) {
+    const candidate = row["m"] as Memory & { embedding: number[] };
+    const sim = cosineSimilarity(memory.embedding, candidate.embedding);
+    if (sim >= RELATED_THRESHOLD) {
+      await conn.query(
+        `MATCH (a:Memory {id: '${escape(memory.id)}'}), (b:Memory {id: '${escape(candidate.id)}'})
+         CREATE (a)-[:RELATED_TO]->(b), (b)-[:RELATED_TO]->(a)`
+      );
+    }
+  }
+}
 
 async function promoteTask(
   c: CandidateMemory,
@@ -133,6 +162,15 @@ export async function promoteToDb(
         `MATCH (s:Session {id: '${escape(c.sessionId)}'}), (m:Memory {id: '${escape(memory.id)}'})
          CREATE (s)-[:HAS_MEMORY]->(m)`
       );
+    }
+
+    // Wire RELATED_TO edges to similar existing memories
+    if (embedding.length > 0) {
+      try {
+        await linkRelatedMemories({ ...memory, embedding }, projectId, conn);
+      } catch {
+        // Never block promotion on graph wiring failures
+      }
     }
 
     promoted.push(memory);

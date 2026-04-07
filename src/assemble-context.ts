@@ -1,7 +1,7 @@
-import type { Memory, Task, ContextBundle } from "./types.js";
+import type { Memory, ScoredMemory, Task, ContextBundle } from "./types.js";
 import type kuzu from "kuzu";
 import { queryAll, escape } from "./kuzu-helpers.js";
-import { searchMemories } from "./search.js";
+import { searchMemoriesWithGraph } from "./search.js";
 
 export async function assembleContext(
   projectId: string,
@@ -26,13 +26,15 @@ export async function assembleContext(
   );
   const nextTasks: Task[] = pendingRows.map((r) => r["t"] as Task);
 
-  // Get key memories — semantic search if query provided, otherwise recency
-  let keyMemories: Memory[];
-  if (query) {
+  // Seed query: explicit query > active task title > nothing
+  const seedQuery = query ?? activeTask?.title ?? null;
+
+  let keyMemories: ScoredMemory[];
+  if (seedQuery) {
     try {
-      keyMemories = await searchMemories(conn, projectId, query, 5);
+      keyMemories = await searchMemoriesWithGraph(conn, projectId, seedQuery);
     } catch {
-      // Fall back to recency if embedding fails
+      // Fall back to recency if embedding unavailable
       keyMemories = await recencyMemories(conn, projectId);
     }
   } else {
@@ -50,14 +52,14 @@ export async function assembleContext(
 async function recencyMemories(
   conn: InstanceType<typeof kuzu.Connection>,
   projectId: string
-): Promise<Memory[]> {
+): Promise<ScoredMemory[]> {
   const rows = await queryAll(
     conn,
     `MATCH (m:Memory {projectId: '${escape(projectId)}'})
      WHERE m.kind IN ['decision', 'question', 'fact', 'summary']
-     RETURN m ORDER BY m.createdAt DESC LIMIT 5`
+     RETURN m ORDER BY m.createdAt DESC LIMIT 8`
   );
-  return rows.map((r) => r["m"] as Memory);
+  return rows.map((r) => ({ ...(r["m"] as Memory), score: 0 }));
 }
 
 export function formatContextBundle(bundle: ContextBundle): string {
@@ -92,14 +94,39 @@ export function formatContextBundle(bundle: ContextBundle): string {
 
   if (bundle.keyMemories.length > 0) {
     lines.push("### Key Context");
-    bundle.keyMemories.forEach((m) => {
+
+    // Group memories by session for readability
+    const bySession = new Map<string, ScoredMemory[]>();
+    const noSession: ScoredMemory[] = [];
+
+    for (const m of bundle.keyMemories) {
+      if (m.sessionTitle) {
+        const key = m.sessionTitle;
+        if (!bySession.has(key)) bySession.set(key, []);
+        bySession.get(key)!.push(m);
+      } else {
+        noSession.push(m);
+      }
+    }
+
+    // Ungrouped first
+    for (const m of noSession) {
       lines.push(`**[${m.kind}]** ${m.title}: ${m.summary}`);
-    });
+    }
+
+    // Grouped by session
+    for (const [sessionTitle, memories] of bySession) {
+      lines.push(`\n_Session: ${sessionTitle}_`);
+      for (const m of memories) {
+        lines.push(`**[${m.kind}]** ${m.title}: ${m.summary}`);
+      }
+    }
+
     lines.push("");
   }
 
   if (bundle.sessionSummary) {
-    lines.push("### Session Summary");
+    lines.push("### Last Session");
     lines.push(bundle.sessionSummary);
   }
 
