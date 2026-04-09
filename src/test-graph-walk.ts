@@ -13,7 +13,7 @@ import * as path from "path";
 import kuzu from "kuzu";
 import { applySchema } from "./db.js";
 import { escape, queryAll } from "./kuzu-helpers.js";
-import { cosineSimilarity, searchMemoriesWithGraph } from "./search.js";
+import { cosineSimilarity, searchGraph } from "./search.js";
 
 // ── Stub embed ───────────────────────────────────────────────────────────────
 // Simple 4-d unit vectors — easy to reason about similarity
@@ -151,7 +151,7 @@ async function testCosineSimilarity() {
 }
 
 async function testGraphWalkRetrieval() {
-  console.log("\n── searchMemoriesWithGraph ──────────────────────");
+  console.log("\n── searchGraph ──────────────────────────────────");
   const { conn, tmpDir } = await makeDb();
   const pid = "proj_test";
 
@@ -175,7 +175,7 @@ async function testGraphWalkRetrieval() {
   await insertMemory(conn, { id: "mem_button", title: "button styling", sessionId: "sess_c", projectId: pid, embedding: vec("button") });
 
   // Query close to auth cluster
-  const results = await searchMemoriesWithGraph(conn, pid, "auth token", 8, 3, stubEmbed);
+  const results = await searchGraph(conn, pid, "auth token", 8, 3, stubEmbed);
   const ids = results.map((r) => r.id);
 
   assert(ids.includes("mem_auth"),    "seed hit: mem_auth returned");
@@ -208,7 +208,7 @@ async function testRelatedToTraversal() {
   await linkRelated(conn, "mem_migration2", "mem_schema");
 
   // Query close to db/migration cluster
-  const results = await searchMemoriesWithGraph(conn, pid, "db migration", 8, 2, stubEmbed);
+  const results = await searchGraph(conn, pid, "db migration", 8, 2, stubEmbed);
   const ids = results.map((r) => r.id);
 
   assert(ids.includes("mem_migration2"), "seed: mem_migration2 found");
@@ -230,7 +230,7 @@ async function testRecencyDecay() {
   await insertMemory(conn, { id: "mem_old",    title: "old auth fact",    sessionId: "sess_r", projectId: pid, embedding: vec("auth"), createdAt: old });
   await insertMemory(conn, { id: "mem_recent", title: "recent auth fact", sessionId: "sess_r", projectId: pid, embedding: vec("auth"), createdAt: recent });
 
-  const results = await searchMemoriesWithGraph(conn, pid, "auth", 8, 2, stubEmbed);
+  const results = await searchGraph(conn, pid, "auth", 8, 2, stubEmbed);
   const recentIdx = results.findIndex((r) => r.id === "mem_recent");
   const oldIdx    = results.findIndex((r) => r.id === "mem_old");
 
