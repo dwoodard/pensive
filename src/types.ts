@@ -51,6 +51,7 @@ export interface Task {
   completedAt?: string;
   completionNote?: string;
   doneSuggestion?: string;
+  activatedAt?: string;
   embedding?: number[];
 }
 

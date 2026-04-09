@@ -965,8 +965,9 @@ tasksCmd
       `MATCH (m:Task {projectId: '${esc(pid)}', status: 'active'})
        SET m.status = 'pending', m.taskOrder = ${minOrder - 1}`
     );
+    const activatedAt = new Date().toISOString();
     await conn.query(
-      `MATCH (m:Task {id: '${esc(target_id)}'}) SET m.status = 'active', m.doneSuggestion = ''`
+      `MATCH (m:Task {id: '${esc(target_id)}'}) SET m.status = 'active', m.doneSuggestion = '', m.activatedAt = '${esc(activatedAt)}'`
     );
 
     const title = pending.find((t) => String(t["id"]) === target_id)?.["title"];
@@ -1361,11 +1362,11 @@ memoriesCmd
 // ── Walk ─────────────────────────────────────────────────────────────────────
 
 program
-  .command("walk [sessionId]")
-  .description("Walk session history forward or backward from a starting point")
-  .option("-d, --direction <dir>", "forward, backward, or both", "backward")
-  .option("-n, --steps <n>", "Number of steps to walk", "3")
-  .action(async (sessionId: string | undefined, opts: { direction: string; steps: string }) => {
+  .command("walk [id]")
+  .description("Walk session history from a starting point — accepts a session ID or task ID")
+  .option("-d, --direction <dir>", "forward, backward, or both (ignored for task IDs)", "backward")
+  .option("-n, --steps <n>", "Number of steps to walk (ignored for task IDs)", "3")
+  .action(async (id: string | undefined, opts: { direction: string; steps: string }) => {
     const { config, conn } = await getProjectDb(process.cwd());
     const pid = config.projectId;
     const { escape: esc } = await import("./kuzu-helpers.js");
@@ -1373,7 +1374,60 @@ program
     const steps = Math.max(1, parseInt(opts.steps ?? "3", 10));
     const dir = (opts.direction ?? "backward").toLowerCase();
 
-    // Fetch all sessions for project in chronological order
+    // Check if the ID resolves to a Task node
+    if (id) {
+      const taskRows = await queryAll(conn,
+        `MATCH (t:Task {projectId: '${esc(pid)}'})
+         WHERE t.id CONTAINS '${esc(id)}'
+         RETURN t LIMIT 1`);
+      if (taskRows.length > 0) {
+        const task = taskRows[0]["t"] as Record<string, unknown>;
+        const tid = String(task["id"]);
+        const tShort = shortId(tid);
+
+        console.log(`\n${chalk.bold.cyan("── Task Walk")} ${chalk.dim("[" + tShort + "]")}\n`);
+        console.log(`${chalk.bold.white(String(task["title"] ?? "(untitled)"))}`);
+        if (task["summary"]) console.log(`${chalk.dim(String(task["summary"]))}`);
+        console.log(`${chalk.dim("status: " + String(task["status"] ?? "unknown"))}`);
+        console.log();
+
+        // Find sessions linked via WORKED_ON edges
+        const linkedRows = await queryAll(conn,
+          `MATCH (s:Session)-[:WORKED_ON]->(t:Task {id: '${esc(tid)}'})
+           RETURN s ORDER BY s.startedAt ASC`);
+
+        if (linkedRows.length === 0) {
+          console.log(chalk.dim("  No sessions linked yet. Links are written at session compaction."));
+          console.log(chalk.dim("  Try: pensieve search \"" + String(task["title"] ?? "").slice(0, 40) + "\""));
+          console.log();
+          return;
+        }
+
+        console.log(chalk.dim(`  ${linkedRows.length} session(s) worked on this task:\n`));
+        for (const r of linkedRows) {
+          const s = r["s"] as Record<string, unknown>;
+          const sid = String(s["id"]);
+          const ts = s["startedAt"] ? new Date(String(s["startedAt"])).toLocaleString() : "unknown";
+          console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + sessionShortId(sid) + "]")} ${chalk.white(String(s["title"] ?? "(untitled)"))}`);
+          console.log(`   ${chalk.dim(ts)}`);
+          if (s["summary"]) console.log(`   ${chalk.dim(String(s["summary"]).slice(0, 160) + (String(s["summary"]).length > 160 ? "…" : ""))}`);
+
+          const memRows = await queryAll(conn,
+            `MATCH (s:Session {id: '${esc(sid)}'})-[:HAS_MEMORY]->(m:Memory)
+             RETURN m ORDER BY m.createdAt ASC`);
+          if (memRows.length > 0) {
+            for (const mr of memRows) {
+              const m = mr["m"] as Record<string, unknown>;
+              console.log(`   ${chalk.dim("[" + String(m["kind"] ?? "memory").toUpperCase() + "]")} ${chalk.dim("[" + shortId(String(m["id"])) + "]")} ${String(m["title"] ?? "")}`);
+            }
+          }
+          console.log();
+        }
+        return;
+      }
+    }
+
+    // Fall through: session-based walk
     const allRows = await queryAll(conn,
       `MATCH (p:Project {id: '${esc(pid)}'})-[:HAS_SESSION]->(s:Session)
        RETURN s ORDER BY s.startedAt ASC`);
@@ -1386,10 +1440,10 @@ program
 
     // Resolve seed session
     let seedIdx: number;
-    if (sessionId) {
-      seedIdx = allSessions.findIndex((s) => String(s["id"]).includes(sessionId));
+    if (id) {
+      seedIdx = allSessions.findIndex((s) => String(s["id"]).includes(id));
       if (seedIdx === -1) {
-        cerr(`No session matching "${sessionId}". Run: pensieve sessions`);
+        cerr(`No session or task matching "${id}". Run: pensieve sessions or pensieve tasks`);
         process.exit(1);
       }
     } else {

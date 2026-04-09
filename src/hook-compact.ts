@@ -88,6 +88,26 @@ async function main(): Promise<void> {
       }
     }
 
+    // Link current session to tasks worked on during this session
+    try {
+      const now = new Date().toISOString();
+      // Link to currently active task
+      await conn.query(
+        `MATCH (s:Session {id: '${escape(sessionId)}'}), (t:Task {projectId: '${escape(config.projectId)}', status: 'active'})
+         WHERE NOT EXISTS { MATCH (s)-[:WORKED_ON]->(t) }
+         CREATE (s)-[:WORKED_ON {createdAt: '${escape(now)}'}]->(t)`
+      );
+      // Link to tasks completed during this session (completedAt >= session startedAt)
+      await conn.query(
+        `MATCH (s:Session {id: '${escape(sessionId)}'}), (t:Task {projectId: '${escape(config.projectId)}', status: 'done'})
+         WHERE t.completedAt >= s.startedAt
+           AND NOT EXISTS { MATCH (s)-[:WORKED_ON]->(t) }
+         CREATE (s)-[:WORKED_ON {createdAt: '${escape(now)}'}]->(t)`
+      );
+    } catch {
+      // Never block compaction
+    }
+
     // Review and promote accumulated memory candidates
     const candidates = readAllCandidates(projectMemoryDir);
     if (candidates.length === 0) process.exit(0);

@@ -119,6 +119,7 @@ export async function applySchema(
     `CREATE REL TABLE IF NOT EXISTS REFERENCES(FROM Turn TO File)`,
     `CREATE REL TABLE IF NOT EXISTS RELATED_TO(FROM Memory TO Memory, score FLOAT, createdAt STRING, model STRING)`,
     `CREATE REL TABLE IF NOT EXISTS LINKED(FROM Memory TO Memory, relation STRING, createdAt STRING, note STRING, source STRING, confidence FLOAT, sessionId STRING)`,
+    `CREATE REL TABLE IF NOT EXISTS WORKED_ON(FROM Session TO Task, createdAt STRING)`,
   ];
 
   for (const stmt of statements) {
@@ -183,6 +184,7 @@ export async function applySchema(
   try { await conn.query(`ALTER TABLE Memory ADD embedding FLOAT[] DEFAULT []`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Task ADD embedding FLOAT[] DEFAULT []`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Task ADD doneSuggestion STRING DEFAULT ''`); } catch { /* exists */ }
+  try { await conn.query(`ALTER TABLE Task ADD activatedAt STRING DEFAULT ''`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Session ADD embedding FLOAT[] DEFAULT []`); } catch { /* exists */ }
 
   // Edge property migrations
