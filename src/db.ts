@@ -129,6 +129,7 @@ export async function applySchema(
 
   // Column migrations — safe to ignore if already applied
   try { await conn.query(`ALTER TABLE Project ADD description STRING DEFAULT ''`); } catch { /* exists */ }
+  try { await conn.query(`ALTER TABLE Task ADD parentId STRING DEFAULT ''`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Memory ADD taskOrder INT64 DEFAULT 0`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Session ADD title STRING DEFAULT ''`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Session ADD archived BOOLEAN DEFAULT false`); } catch { /* exists */ }

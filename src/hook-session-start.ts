@@ -53,7 +53,8 @@ function extractSummaryExcerpt(summary: string): string {
 function buildBundle(
   activeTask: Task | null,
   pending: Task[],
-  lastSession: Session | null
+  lastSession: Session | null,
+  activeSubtasks: Task[] = []
 ): string {
   const lines: string[] = [];
   let remaining = BUDGET;
@@ -83,6 +84,13 @@ function buildBundle(
     push(`## Tasks`);
     if (activeTask) {
       push(`ACTIVE: ${activeTask.title}`);
+      if (activeTask.summary) push(`  ${activeTask.summary}`);
+      if (activeSubtasks.length > 0) {
+        activeSubtasks.forEach((s) => {
+          const checkbox = s.status === "done" ? "[x]" : s.status === "blocked" ? "[-]" : "[ ]";
+          push(`  ${checkbox} ${s.title}`);
+        });
+      }
     }
     if (pending.length > 0) {
       push(`Queue:`);
@@ -145,7 +153,17 @@ async function main(): Promise<void> {
     const pending = pendingRows.map((r) => r["t"] as Task);
     const lastSession = lastSessionRows[0]?.["s"] as Session | undefined ?? null;
 
-    const bundle = buildBundle(activeTask, pending, lastSession);
+    let activeSubtasks: Task[] = [];
+    if (activeTask) {
+      const subtaskRows = await queryAll(conn,
+        `MATCH (t:Task {projectId: '${pid}', parentId: '${escape(activeTask.id)}'})
+         WHERE t.status <> 'done'
+         RETURN t ORDER BY t.taskOrder ASC`
+      );
+      activeSubtasks = subtaskRows.map((r) => r["t"] as Task);
+    }
+
+    const bundle = buildBundle(activeTask, pending, lastSession, activeSubtasks);
     if (bundle) process.stdout.write(bundle + "\n");
   } catch {
     // Never block session start

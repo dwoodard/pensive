@@ -556,11 +556,45 @@ function sessionShortId(id: string): string {
   return base.slice(0, 8);
 }
 
+function printSubtasks(parentId: string, subtasks: Record<string, unknown>[], indent: string): void {
+  const children = subtasks.filter((s) => String(s["parentId"]) === parentId);
+  children.forEach((s) => {
+    const status = String(s["status"]);
+    const checkbox = status === "done" ? chalk.dim("[x]") : status === "blocked" ? chalk.yellow("[-]") : "[ ]";
+    const titleFmt = status === "done" ? chalk.dim(String(s["title"])) : status === "blocked" ? chalk.yellow(String(s["title"])) : String(s["title"]);
+    console.log(`${indent}${checkbox} ${chalk.dim("[" + shortId(String(s["id"])) + "]")}  ${titleFmt}`);
+    const subSummary = String(s["summary"] ?? "").trim();
+    if (subSummary) {
+      subSummary.split("\n").forEach((line) =>
+        console.log(`${indent}    ${chalk.dim("- " + line)}`)
+      );
+    }
+  });
+}
+
+function printTaskWithDetails(
+  t: Record<string, unknown>,
+  titleLine: string,
+  subtasks: Record<string, unknown>[],
+  summaryIndent: string,
+  subtaskIndent: string
+): void {
+  console.log(titleLine);
+  const summary = String(t["summary"] ?? "").trim();
+  if (summary) {
+    summary.split("\n").forEach((line) =>
+      console.log(`${summaryIndent}${chalk.dim("- " + line)}`)
+    );
+  }
+  printSubtasks(String(t["id"]), subtasks, subtaskIndent);
+}
+
 function printTaskList(
   active: Record<string, unknown> | undefined,
   pending: Record<string, unknown>[],
   blocked: Record<string, unknown>[],
-  done: Record<string, unknown>[]
+  done: Record<string, unknown>[],
+  subtasks: Record<string, unknown>[] = []
 ): void {
   if (!active && pending.length === 0 && blocked.length === 0 && done.length === 0) {
     console.log("No tasks. Add one: pensive tasks add \"title\"");
@@ -568,24 +602,41 @@ function printTaskList(
   }
 
   if (active) {
-    console.log(`\n${chalk.green("●")} ${chalk.bold.green("ACTIVE")} ${chalk.dim("[" + shortId(String(active["id"])) + "]")}   ${chalk.bold.green(String(active["title"]))}`);
-    if (active["summary"]) console.log(`                      ${chalk.dim(String(active["summary"]))}`);
+    printTaskWithDetails(
+      active,
+      `\n${chalk.green("●")} ${chalk.bold.green("ACTIVE")} ${chalk.dim("[" + shortId(String(active["id"])) + "]")}   ${chalk.bold.green(String(active["title"]))}`,
+      subtasks,
+      "                      ",
+      "       "
+    );
   } else {
     console.log(chalk.dim("\n  (no active task)"));
   }
 
   if (pending.length > 0) {
     console.log(chalk.bold("\n  QUEUE"));
-    pending.forEach((t, i) =>
-      console.log(`  ${chalk.dim(String(i + 1).padStart(2))}  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${t["title"]}`)
-    );
+    pending.forEach((t, i) => {
+      printTaskWithDetails(
+        t,
+        `  ${chalk.dim(String(i + 1).padStart(2))}  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${t["title"]}`,
+        subtasks,
+        "        ",
+        "        "
+      );
+    });
   }
 
   if (blocked.length > 0) {
     console.log(chalk.bold.yellow("\n  BLOCKED"));
-    blocked.forEach((t) =>
-      console.log(`  ${chalk.yellow("✗")}  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${chalk.yellow(String(t["title"]))}`)
-    );
+    blocked.forEach((t) => {
+      printTaskWithDetails(
+        t,
+        `  ${chalk.yellow("✗")}  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${chalk.yellow(String(t["title"]))}`,
+        subtasks,
+        "        ",
+        "        "
+      );
+    });
   }
 
   if (done.length > 0) {
@@ -610,16 +661,19 @@ tasksCmd
 
     const activeRows = await queryAll(conn,
       `MATCH (m:Task {projectId: '${pid}', status: 'active'})
+       WHERE m.parentId = '' OR m.parentId IS NULL
        RETURN m ORDER BY m.createdAt DESC LIMIT 1`);
     const pendingRows = await queryAll(conn,
       `MATCH (m:Task {projectId: '${pid}', status: 'pending'})
+       WHERE m.parentId = '' OR m.parentId IS NULL
        RETURN m ORDER BY m.taskOrder ASC`);
     const blockedRows = await queryAll(conn,
       `MATCH (m:Task {projectId: '${pid}', status: 'blocked'})
+       WHERE m.parentId = '' OR m.parentId IS NULL
        RETURN m ORDER BY m.createdAt DESC`);
     if (opts.all) {
       const allRows = await queryAll(conn,
-        `MATCH (t:Task {projectId: '${pid}'}) RETURN t ORDER BY t.taskOrder ASC, t.createdAt ASC`);
+        `MATCH (t:Task {projectId: '${pid}'}) WHERE t.parentId = '' OR t.parentId IS NULL RETURN t ORDER BY t.taskOrder ASC, t.createdAt ASC`);
       const statusOrder = ["active", "pending", "blocked", "done"];
       const all = allRows
         .map((r) => r["t"] as Record<string, unknown>)
@@ -637,22 +691,50 @@ tasksCmd
 
     const doneRows = await queryAll(conn,
       `MATCH (m:Task {projectId: '${pid}', status: 'done'})
+       WHERE m.parentId = '' OR m.parentId IS NULL
        RETURN m ORDER BY m.createdAt DESC LIMIT 10`);
+    const subtaskRows = await queryAll(conn,
+      `MATCH (t:Task {projectId: '${pid}'}) WHERE t.parentId <> '' RETURN t`);
 
     printTaskList(
       activeRows[0]?.["m"] as Record<string, unknown> | undefined,
       pendingRows.map((r) => r["m"] as Record<string, unknown>),
       blockedRows.map((r) => r["m"] as Record<string, unknown>),
-      doneRows.map((r) => r["m"] as Record<string, unknown>)
+      doneRows.map((r) => r["m"] as Record<string, unknown>),
+      subtaskRows.map((r) => r["t"] as Record<string, unknown>)
     );
   });
 
 tasksCmd
   .command("add <title>")
   .description("Add a task to the queue")
-  .action(async (title: string) => {
+  .option("--parent <target>", "Parent task id prefix, queue position, or 'active'")
+  .action(async (title: string, opts: { parent?: string }) => {
     const { config, conn } = await getProjectDb(process.cwd());
     const pid = config.projectId;
+    const { escape: esc } = await import("./kuzu-helpers.js");
+    const { default: crypto } = await import("crypto");
+
+    let parentId = "";
+    if (opts.parent) {
+      const allRows = await queryAll(conn,
+        `MATCH (t:Task {projectId: '${pid}'}) WHERE t.status <> 'done' RETURN t ORDER BY t.taskOrder ASC`);
+      const all = allRows.map((r) => r["t"] as Record<string, unknown>);
+      const pos = /^\d+$/.test(opts.parent) ? parseInt(opts.parent, 10) : NaN;
+      let parentTask: Record<string, unknown> | undefined;
+      if (opts.parent === "active") {
+        parentTask = all.find((t) => t["status"] === "active");
+      } else if (!isNaN(pos) && pos >= 1 && pos <= all.length) {
+        parentTask = all[pos - 1];
+      } else {
+        parentTask = all.find((t) => shortId(String(t["id"])).startsWith(opts.parent!));
+      }
+      if (!parentTask) {
+        cerr(`No task matching "${opts.parent}". Run: pensive tasks`);
+        process.exit(1);
+      }
+      parentId = String(parentTask["id"]);
+    }
 
     const orderRows = await queryAll(conn,
       `MATCH (m:Task {projectId: '${pid}', status: 'pending'})
@@ -660,8 +742,6 @@ tasksCmd
     const maxOrder = Number(orderRows[0]?.["maxOrder"] ?? 0);
     const taskOrder = maxOrder + 1;
 
-    const { escape: esc } = await import("./kuzu-helpers.js");
-    const { default: crypto } = await import("crypto");
     const id = `task_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 
     await conn.query(
@@ -672,7 +752,8 @@ tasksCmd
         status: 'pending',
         taskOrder: ${taskOrder},
         projectId: '${esc(pid)}',
-        createdAt: '${new Date().toISOString()}'
+        createdAt: '${new Date().toISOString()}',
+        parentId: '${esc(parentId)}'
       })`
     );
 
@@ -681,7 +762,47 @@ tasksCmd
        CREATE (p)-[:HAS_TASK]->(t)`
     );
 
-    console.log(`${chalk.green("Added:")} ${title}  ${chalk.dim("[" + shortId(id) + "]")}`);
+    if (parentId) {
+      const parentRows = await queryAll(conn, `MATCH (t:Task {id: '${esc(parentId)}'}) RETURN t`);
+      const parentTitle = (parentRows[0]?.["t"] as Record<string, unknown>)?.["title"] ?? parentId;
+      console.log(`${chalk.green("Added:")} ${title}  ${chalk.dim("[" + shortId(id) + "]")}  ${chalk.dim("↳ " + parentTitle)}`);
+    } else {
+      console.log(`${chalk.green("Added:")} ${title}  ${chalk.dim("[" + shortId(id) + "]")}`);
+    }
+  });
+
+tasksCmd
+  .command("summary <target> <text>")
+  .description("Set the summary/details for a task by queue position or id prefix")
+  .action(async (target: string, text: string) => {
+    const { config, conn } = await getProjectDb(process.cwd());
+    const pid = config.projectId;
+    const { escape: esc } = await import("./kuzu-helpers.js");
+
+    const allRows = await queryAll(conn,
+      `MATCH (t:Task {projectId: '${pid}'}) WHERE t.status <> 'done' RETURN t ORDER BY t.taskOrder ASC`);
+    const all = allRows.map((r) => r["t"] as Record<string, unknown>);
+
+    let targetId: string | undefined;
+    if (target === "active") {
+      targetId = String(all.find((t) => t["status"] === "active")?.[  "id"] ?? "");
+    } else {
+      const pos = /^\d+$/.test(target) ? parseInt(target, 10) : NaN;
+      if (!isNaN(pos) && pos >= 1 && pos <= all.length) {
+        targetId = String(all[pos - 1]["id"]);
+      } else {
+        targetId = String(all.find((t) => shortId(String(t["id"])).startsWith(target))?.[  "id"] ?? "");
+      }
+    }
+
+    if (!targetId) {
+      cerr(`No task matching "${target}". Run: pensive tasks`);
+      process.exit(1);
+    }
+
+    await conn.query(`MATCH (t:Task {id: '${esc(targetId)}'}) SET t.summary = '${esc(text)}'`);
+    const task = all.find((t) => String(t["id"]) === targetId);
+    console.log(`${chalk.green("Summary set:")} ${task?.["title"]}  ${chalk.dim("- " + text)}`);
   });
 
 tasksCmd
@@ -699,7 +820,7 @@ tasksCmd
     const all = allRows.map((r) => r["t"] as Record<string, unknown>);
 
     let targetId: string | undefined;
-    const pos = parseInt(target, 10);
+    const pos = /^\d+$/.test(target) ? parseInt(target, 10) : NaN;
     if (!isNaN(pos) && pos >= 1 && pos <= all.length) {
       targetId = String(all[pos - 1]["id"]);
     } else {
@@ -730,7 +851,7 @@ tasksCmd
     const pending = pendingRows.map((r) => r["m"] as Record<string, unknown>);
 
     let target_id: string | undefined;
-    const pos = parseInt(target, 10);
+    const pos = /^\d+$/.test(target) ? parseInt(target, 10) : NaN;
     if (!isNaN(pos) && pos >= 1 && pos <= pending.length) {
       target_id = String(pending[pos - 1]["id"]);
     } else {
@@ -787,7 +908,7 @@ tasksCmd
 
     for (const target of targets) {
       let task: Record<string, unknown> | undefined;
-      const pos = parseInt(target, 10);
+      const pos = /^\d+$/.test(target) ? parseInt(target, 10) : NaN;
       if (!isNaN(pos) && pos >= 1 && pos <= pending.length) {
         task = pending[pos - 1];
       } else {
@@ -857,7 +978,7 @@ tasksCmd
     const all = allRows.map((r) => r["t"] as Record<string, unknown>);
 
     let targetId: string | undefined;
-    const pos = parseInt(target, 10);
+    const pos = /^\d+$/.test(target) ? parseInt(target, 10) : NaN;
     if (!isNaN(pos) && pos >= 1 && pos <= all.length) {
       targetId = String(all[pos - 1]["id"]);
     } else {

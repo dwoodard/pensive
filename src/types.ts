@@ -46,6 +46,7 @@ export interface Task {
   taskOrder: number;
   projectId: string;
   createdAt: string;
+  parentId?: string;
 }
 
 export interface Turn {
