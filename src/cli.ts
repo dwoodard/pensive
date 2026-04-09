@@ -317,23 +317,23 @@ program
 
     for (const r of results) {
       if (r.nodeType === "memory") {
-        console.log(`${chalk.bold.cyan("──")} ${chalk.bold("[" + (r.kind ?? "memory").toUpperCase() + "]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
+        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[" + (r.kind ?? "memory").toUpperCase() + "]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
         if (r.summary) console.log(`   ${chalk.dim(r.summary)}`);
         if (r.sessionTitle) console.log(`   ${chalk.dim("session:")} ${r.sessionTitle}`);
         if (r.breadcrumbs && r.breadcrumbs.length > 0) {
-          const crumbList = r.breadcrumbs.map((c) => `${(c.kind ?? "memory").toUpperCase()}: ${c.title}`).join("  ·  ");
+          const crumbList = r.breadcrumbs.map((c) => `${chalk.dim(shortId(String(c.id)))} ${(c.kind ?? "memory").toUpperCase()}: ${c.title}`).join("  ·  ");
           console.log(`   ${chalk.dim("↳ also from this session:")} ${chalk.dim(crumbList)}`);
         }
       } else if (r.nodeType === "task") {
         const statusColor = r.status === "active" ? chalk.green : r.status === "blocked" ? chalk.yellow : r.status === "done" ? chalk.dim : chalk.white;
-        console.log(`${chalk.bold.cyan("──")} ${chalk.bold("[TASK]")} ${chalk.white(r.title)}  ${statusColor(r.status ?? "")}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
+        console.log(`${chalk.bold.cyan("──")} ${chalk.dim(shortId(String(r.id)))} ${chalk.bold("[TASK]")} ${chalk.white(r.title)}  ${statusColor(r.status ?? "")}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
         if (r.summary) console.log(`   ${chalk.dim(r.summary)}`);
       } else if (r.nodeType === "turn") {
-        console.log(`${chalk.bold.cyan("──")} ${chalk.bold("[TURN]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
+        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[TURN]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
         if (r.summary) console.log(`   ${chalk.dim(r.summary.slice(0, 120) + (r.summary.length > 120 ? "…" : ""))}`);
         if (r.createdAt) console.log(`   ${chalk.dim("timestamp:")} ${chalk.dim(new Date(r.createdAt).toLocaleString())}`);
       } else {
-        console.log(`${chalk.bold.cyan("──")} ${chalk.bold("[SESSION]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
+        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[SESSION]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
         if (r.summary) console.log(`   ${chalk.dim(r.summary.slice(0, 120) + (r.summary.length > 120 ? "…" : ""))}`);
       }
       console.log();
@@ -1962,7 +1962,7 @@ program
         const conf = Number(r["confidence"] ?? 1);
       const confTag = conf < 1 ? chalk.dim(` [${Math.round(conf * 100)}% confident]`) : "";
       const srcTag = String(r["source"] ?? "human") !== "human" ? chalk.dim(` [${r["source"]}]`) : "";
-      console.log(`  [${String(a["kind"] ?? "memory").toUpperCase()}] ${chalk.white(String(a["title"]))}  ${chalk.bold.cyan("─" + String(r["relation"]) + "→")}  [${String(b["kind"] ?? "memory").toUpperCase()}] ${chalk.white(String(b["title"]))}${confTag}${srcTag}`);
+      console.log(`  ${chalk.dim(shortId(String(a["id"])))} [${String(a["kind"] ?? "memory").toUpperCase()}] ${chalk.white(String(a["title"]))}  ${chalk.bold.cyan("─" + String(r["relation"]) + "→")}  ${chalk.dim(shortId(String(b["id"])))} [${String(b["kind"] ?? "memory").toUpperCase()}] ${chalk.white(String(b["title"]))}${confTag}${srcTag}`);
         if (r["note"]) console.log(`    ${chalk.dim(String(r["note"]))}`);
       }
       console.log();
@@ -1997,7 +1997,7 @@ program
         conf < 1 ? `${Math.round(conf * 100)}% confident` : "",
         String(r["source"] ?? "human") !== "human" ? String(r["source"]) : "",
       ].filter(Boolean).join(", ");
-      console.log(`  ${reverseLabel} ${chalk.bold.cyan(rel.padEnd(12))} [${String(b["kind"] ?? "memory").toUpperCase()}] ${chalk.white(String(b["title"] ?? ""))}${meta ? chalk.dim("  " + meta) : ""}`);
+      console.log(`  ${reverseLabel} ${chalk.bold.cyan(rel.padEnd(12))} ${chalk.dim(shortId(String(b["id"])))} [${String(b["kind"] ?? "memory").toUpperCase()}] ${chalk.white(String(b["title"] ?? ""))}${meta ? chalk.dim("  " + meta) : ""}`);
       if (r["note"]) console.log(`    ${chalk.dim(String(r["note"]))}`);
     }
 
@@ -2012,7 +2012,7 @@ program
         conf < 1 ? `${Math.round(conf * 100)}% confident` : "",
         String(r["source"] ?? "human") !== "human" ? String(r["source"]) : "",
       ].filter(Boolean).join(", ");
-      console.log(`  ${chalk.dim(reverseLabel.padEnd(14))} [${String(a["kind"] ?? "memory").toUpperCase()}] ${chalk.white(String(a["title"] ?? ""))}${meta ? chalk.dim("  " + meta) : ""}`);
+      console.log(`  ${chalk.dim(reverseLabel.padEnd(14))} ${chalk.dim(shortId(String(a["id"])))} [${String(a["kind"] ?? "memory").toUpperCase()}] ${chalk.white(String(a["title"] ?? ""))}${meta ? chalk.dim("  " + meta) : ""}`);
       if (r["note"]) console.log(`    ${chalk.dim(String(r["note"]))}`);
     }
 
@@ -2025,7 +2025,7 @@ program
         (o) => String((o["b"] as Record<string, unknown>)["id"]) === String(a["id"]) && String((o["r"] as Record<string, unknown>)["relation"]) === "contradicts"
       );
       if (!alreadyOut) {
-        console.log(`  ↔ ${"contradicts".padEnd(12)} [${String(a["kind"] ?? "memory").toUpperCase()}] ${chalk.white(String(a["title"] ?? ""))}`);
+        console.log(`  ↔ ${"contradicts".padEnd(12)} ${chalk.dim(shortId(String(a["id"])))} [${String(a["kind"] ?? "memory").toUpperCase()}] ${chalk.white(String(a["title"] ?? ""))}`);
       }
     }
 
