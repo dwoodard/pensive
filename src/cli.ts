@@ -249,10 +249,11 @@ program
   });
 
 program
-  .command("search <query>")
+  .command("search [query]")
   .description("Semantic search across memories, tasks, and sessions")
-.option("-k, --top <n>", "Number of results", "10")
-  .action(async (query: string, opts) => {
+  .option("-k, --top <n>", "Number of results", "10")
+  .option("--file <path>", "Find turns and memories from sessions that referenced this file")
+  .action(async (query: string | undefined, opts) => {
     const detected = detectProject(process.cwd());
     if (!detected) { cerr("No pensive project found. Run: pensive init"); process.exit(1); }
 
@@ -260,9 +261,66 @@ program
     const config = readProjectConfig(projectMemoryDir);
     const { conn } = getDb(projectMemoryDir);
     await applySchema(conn, projectMemoryDir);
+    const pid = config.projectId;
 
-    const topK = parseInt(opts.top ?? "5", 10);
-    const results = await searchAll(conn, config.projectId, query, topK);
+    if (!query && !opts.file) {
+      cerr("Provide a query or --file <path>");
+      process.exit(1);
+    }
+
+    // ── --file mode: traverse Turn-[:REFERENCES]->File->Session->Memory ──────
+    if (opts.file) {
+      const filePath = path.relative(detected.projectRoot, path.resolve(process.cwd(), opts.file));
+      const { escape: esc } = await import("./kuzu-helpers.js");
+
+      const rows = await queryAll(conn,
+        `MATCH (f:File {projectId: '${esc(pid)}'})\
+         WHERE f.path = '${esc(filePath)}' OR f.path ENDS WITH '${esc(filePath)}'\
+         MATCH (t:Turn)-[:REFERENCES]->(f)\
+         MATCH (s:Session)-[:HAS_TURN]->(t)\
+         OPTIONAL MATCH (s)-[:HAS_MEMORY]->(m:Memory)\
+         RETURN t, m, s.title AS sessionTitle, f.path AS filePath\
+         ORDER BY t.timestamp DESC`
+      );
+
+      if (rows.length === 0) {
+        console.log(chalk.dim(`No results for file: ${filePath}`));
+        return;
+      }
+
+      console.log(`\n${chalk.dim("File:")} ${chalk.white(filePath)}\n`);
+
+      // Group by turn, collect memories per session
+      const byTurn = new Map<string, { turn: Record<string, unknown>; sessionTitle: string; memories: Record<string, unknown>[] }>();
+      for (const row of rows) {
+        const t = row["t"] as Record<string, unknown>;
+        const tid = String(t["id"]);
+        if (!byTurn.has(tid)) {
+          byTurn.set(tid, { turn: t, sessionTitle: String(row["sessionTitle"] ?? ""), memories: [] });
+        }
+        if (row["m"]) byTurn.get(tid)!.memories.push(row["m"] as Record<string, unknown>);
+      }
+
+      for (const { turn, sessionTitle, memories } of byTurn.values()) {
+        const ts = turn["timestamp"] ? new Date(String(turn["timestamp"])).toLocaleString() : "";
+        console.log(`${chalk.bold.cyan("──")} ${chalk.bold("[TURN]")} ${chalk.white(String(turn["userText"] ?? "").slice(0, 80))}  ${chalk.dim(ts)}`);
+        if (sessionTitle) console.log(`   ${chalk.dim("session:")} ${sessionTitle}`);
+        const assistantText = String(turn["assistantText"] ?? "").slice(0, 120);
+        if (assistantText) console.log(`   ${chalk.dim(assistantText + (String(turn["assistantText"] ?? "").length > 120 ? "…" : ""))}`);
+        if (memories.length > 0) {
+          console.log(`   ${chalk.dim("memories:")}`);
+          for (const m of memories) {
+            console.log(`     ${chalk.dim("[" + String(m["kind"] ?? "memory").toUpperCase() + "]")} ${String(m["title"] ?? "")}`);
+          }
+        }
+        console.log();
+      }
+      return;
+    }
+
+    // ── normal semantic search ────────────────────────────────────────────────
+    const topK = parseInt(opts.top ?? "10", 10);
+    const results = await searchAll(conn, pid, query!, topK);
 
     if (results.length === 0) {
       console.log(chalk.dim("No results found."));
@@ -286,6 +344,10 @@ program
         const statusColor = r.status === "active" ? chalk.green : r.status === "blocked" ? chalk.yellow : r.status === "done" ? chalk.dim : chalk.white;
         console.log(`${chalk.bold.cyan("──")} ${chalk.bold("[TASK]")} ${chalk.white(r.title)}  ${statusColor(r.status ?? "")}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
         if (r.summary) console.log(`   ${chalk.dim(r.summary)}`);
+      } else if (r.nodeType === "turn") {
+        console.log(`${chalk.bold.cyan("──")} ${chalk.bold("[TURN]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
+        if (r.summary) console.log(`   ${chalk.dim(r.summary.slice(0, 120) + (r.summary.length > 120 ? "…" : ""))}`);
+        if (r.createdAt) console.log(`   ${chalk.dim("timestamp:")} ${chalk.dim(new Date(r.createdAt).toLocaleString())}`);
       } else {
         console.log(`${chalk.bold.cyan("──")} ${chalk.bold("[SESSION]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
         if (r.summary) console.log(`   ${chalk.dim(r.summary.slice(0, 120) + (r.summary.length > 120 ? "…" : ""))}`);
@@ -665,7 +727,12 @@ function printTaskList(
 
   if (done.length > 0) {
     console.log(chalk.dim("\n  DONE"));
-    done.forEach((t) => console.log(chalk.dim(`  ✓  ${t["title"]}`)));
+    done.forEach((t) => {
+      const id = shortId(String(t["id"]));
+      const subCount = subtasks.filter((s) => String(s["parentId"]) === String(t["id"])).length;
+      const subtasksBadge = subCount > 0 ? chalk.dim(` (${subCount} subtask${subCount > 1 ? "s" : ""})`) : "";
+      console.log(chalk.dim(`  ✓  [${id}]${subtasksBadge}  ${t["title"]}`));
+    });
   }
 
   console.log("");
@@ -699,7 +766,7 @@ tasksCmd
     const doneRows = opts.done ? await queryAll(conn,
       `MATCH (m:Task {projectId: '${pid}', status: 'done'})
        WHERE m.parentId = '' OR m.parentId IS NULL
-       RETURN m ORDER BY m.createdAt DESC`) : [];
+       RETURN m ORDER BY m.completedAt DESC, m.createdAt DESC`) : [];
     const subtaskRows = await queryAll(conn,
       `MATCH (t:Task {projectId: '${pid}'}) WHERE t.parentId <> '' RETURN t`);
 
@@ -917,7 +984,7 @@ tasksCmd
          RETURN m LIMIT 1`);
       if (rows.length === 0) { console.log(chalk.dim("No active task.")); return; }
       const task = rows[0]["m"] as Record<string, unknown>;
-      await conn.query(`MATCH (m:Task {id: '${esc(String(task["id"]))}' }) SET m.status = 'done'`);
+      await conn.query(`MATCH (m:Task {id: '${esc(String(task["id"]))}' }) SET m.status = 'done', m.completedAt = '${new Date().toISOString()}'`);
       console.log(`${chalk.green("Done:")} ${task["title"]}`);
       return;
     }
@@ -937,7 +1004,7 @@ tasksCmd
         task = all.find((t) => shortId(String(t["id"])).startsWith(target));
       }
       if (!task) { cerr(`No task matching "${target}"`); continue; }
-      await conn.query(`MATCH (m:Task {id: '${esc(String(task["id"]))}' }) SET m.status = 'done'`);
+      await conn.query(`MATCH (m:Task {id: '${esc(String(task["id"]))}' }) SET m.status = 'done', m.completedAt = '${new Date().toISOString()}'`);
       console.log(`${chalk.green("Done:")} ${task["title"]}`);
     }
   });
@@ -1484,7 +1551,7 @@ program
           );
         }
         if (!task) return `No task matching "${target}".`;
-        await conn.query(`MATCH (t:Task {id: '${esc(String(task["id"]))}'}) SET t.status = 'done'`);
+        await conn.query(`MATCH (t:Task {id: '${esc(String(task["id"]))}'}) SET t.status = 'done', t.completedAt = '${new Date().toISOString()}'`);
         return `Marked done: "${task["title"]}"`;
       }
 
