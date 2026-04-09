@@ -115,6 +115,7 @@ export function formatContextBundle(bundle: ContextBundle): string {
     // Ungrouped first
     for (const m of noSession) {
       lines.push(`**[${m.kind}]** ${m.title}: ${m.summary}`);
+      if (m.recallCue) lines.push(`  _when: ${m.recallCue}_`);
     }
 
     // Grouped by session
@@ -122,6 +123,7 @@ export function formatContextBundle(bundle: ContextBundle): string {
       lines.push(`\n_Session: ${sessionTitle}_`);
       for (const m of memories) {
         lines.push(`**[${m.kind}]** ${m.title}: ${m.summary}`);
+        if (m.recallCue) lines.push(`  _when: ${m.recallCue}_`);
       }
     }
 

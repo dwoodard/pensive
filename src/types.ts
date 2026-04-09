@@ -48,6 +48,7 @@ export interface Task {
   projectId: string;
   createdAt: string;
   parentId?: string;
+  completedAt?: string;
   embedding?: number[];
 }
 

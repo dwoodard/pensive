@@ -7,7 +7,6 @@ import * as net from "net";
 import { execSync, spawnSync } from "child_process";
 import { initProject } from "./init.js";
 import { ingestTurn } from "./index.js";
-import { assembleContext, formatContextBundle } from "./assemble-context.js";
 import { detectProject } from "./detect-project.js";
 import { getDb, applySchema } from "./db.js";
 import { queryAll } from "./kuzu-helpers.js";
@@ -173,21 +172,8 @@ program
       );
       const { conn } = getDb(projectMemoryDir);
 
-      // Find the most recently modified session summary
-      const summariesDir = path.join(projectMemoryDir, "summaries");
-      let summary = "";
-      if (fs.existsSync(summariesDir)) {
-        const files = fs.readdirSync(summariesDir)
-          .filter((f) => f.endsWith(".md"))
-          .map((f) => ({ f, mtime: fs.statSync(path.join(summariesDir, f)).mtime }))
-          .sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
-        if (files.length > 0) {
-          summary = fs.readFileSync(path.join(summariesDir, files[0].f), "utf-8");
-        }
-      }
-
-      const bundle = await assembleContext(config.projectId, summary, conn);
-      const output = formatContextBundle(bundle);
+      const { querySessionBundle } = await import("./session-bundle.js");
+      const output = await querySessionBundle(conn, config.projectId);
       console.log(output);
     } catch (err) {
       console.error(chalk.red("Context failed:"), err instanceof Error ? err.message : err);
