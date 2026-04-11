@@ -10,6 +10,7 @@ import { findProjectMemoryDir } from "./hook-utils.js";
 import { readProjectConfig } from "./config.js";
 import { getDb } from "./db.js";
 import { querySessionBundle } from "./session-bundle.js";
+import { escape, queryAll } from "./kuzu-helpers.js";
 
 interface SessionStartPayload {
   session_id: string;
@@ -38,6 +39,27 @@ async function main(): Promise<void> {
 
     const config = readProjectConfig(projectMemoryDir);
     const { conn } = await getDb(projectMemoryDir);
+
+    // Create Session node eagerly so it exists from the start of the session
+    const existing = await queryAll(conn,
+      `MATCH (s:Session {id: '${escape(payload.session_id)}'}) RETURN s.id`);
+    if (existing.length === 0) {
+      const now = new Date().toISOString();
+      await conn.query(
+        `CREATE (s:Session {
+          id: '${escape(payload.session_id)}',
+          projectId: '${escape(config.projectId)}',
+          startedAt: '${escape(now)}',
+          title: 'Session Initialization',
+          summary: '',
+          embedding: []
+        })`
+      );
+      await conn.query(
+        `MATCH (p:Project {id: '${escape(config.projectId)}'}), (s:Session {id: '${escape(payload.session_id)}'})
+         CREATE (p)-[:HAS_SESSION]->(s)`
+      );
+    }
 
     const bundle = await querySessionBundle(conn, config.projectId, payload.session_id);
     if (bundle) process.stdout.write(bundle + "\n");

@@ -31,11 +31,18 @@ export function appendTurn(
   const allText = turn.messages.map((m) => m.content).join(" ");
   const filePaths = extractFilePaths(allText);
 
-  const entry = {
+  const entry: {
+    turnId: string;
+    timestamp: string;
+    messages: Array<{ role: string; content: string }>;
+    files: string[];
+    promptId?: string;
+  } = {
     turnId: `turn_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
     timestamp: turn.timestamp,
     messages: turn.messages,
     files: filePaths,
+    ...(turn.promptId ? { promptId: turn.promptId } : {}),
   };
 
   fs.appendFileSync(sessionFile, JSON.stringify(entry) + "\n");

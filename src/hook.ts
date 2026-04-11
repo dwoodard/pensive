@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Claude Code Stop hook.
- * Extracts the last turn from the transcript and runs the full ingest pipeline
- * (turn log + memory extraction).
+ * Fires after each assistant response. Reads the transcript, finds all
+ * user-initiated turns that haven't been logged yet, and ingests them.
+ * De-duplicates via promptId stored in each session JSONL entry.
  */
 
 import * as fs from "fs";
@@ -64,7 +65,6 @@ function extractText(content: TranscriptEntry["message"]["content"]): string {
   );
 }
 
-
 async function main(): Promise<void> {
   let raw: string;
   try {
@@ -91,102 +91,127 @@ async function main(): Promise<void> {
       .filter((l) => l.trim())
       .map((l) => JSON.parse(l));
 
-    // Find the last promptId that has a real user text message
-    let lastPromptId: string | null = null;
-    let lastRoot: TranscriptEntry | null = null;
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const e = entries[i];
-      if (!e.promptId || e.message.role !== "user") continue;
+    // Find ALL promptIds that have a real user text message (distinct by promptId,
+    // keeping the first/root user entry for each prompt).
+    const promptRoots = new Map<string, TranscriptEntry>();
+    for (const e of entries) {
+      if (!e.promptId || e.message?.role !== "user") continue;
       const text = extractText(e.message.content);
-      if (text) {
-        lastPromptId = e.promptId;
-        lastRoot = e;
-        break;
+      if (text && !promptRoots.has(e.promptId)) {
+        promptRoots.set(e.promptId, e);
       }
     }
 
-    if (!lastPromptId || !lastRoot) process.exit(0);
+    if (promptRoots.size === 0) process.exit(0);
 
-    const userText = extractText(lastRoot.message.content);
-    if (!userText) process.exit(0);
-
-    // Assistant messages have no promptId — find them via parentUuid chain.
-    // Collect all uuids that belong to this prompt's user messages.
-    const promptUuids = new Set(
-      entries.filter((e) => e.promptId === lastPromptId).map((e) => e.uuid)
-    );
-    // Walk backwards and find the last assistant message whose parentUuid
-    // points to one of those uuids.
-    let assistantText = "";
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const e = entries[i];
-      if (e.message.role !== "assistant") continue;
-      if (!e.parentUuid || !promptUuids.has(e.parentUuid)) continue;
-      const text = extractText(e.message.content);
-      if (text) { assistantText = text; break; }
-    }
-
-    const cwd = lastRoot.cwd ?? payload.cwd;
-    const sessionId = lastRoot.sessionId ?? payload.session_id;
-    const timestamp = lastRoot.timestamp ?? new Date().toISOString();
+    // Determine session + project context from first available entry
+    const firstRoot = [...promptRoots.values()][0];
+    const cwd = firstRoot.cwd ?? payload.cwd;
+    const sessionId = firstRoot.sessionId ?? payload.session_id;
 
     const projectMemoryDir = findProjectMemoryDir(cwd);
     if (!projectMemoryDir) process.exit(0);
 
-    // Run full ingest pipeline with LLM extraction
-    const turn: Turn = {
-      client: "claude-code",
-      cwd,
-      sessionId,
-      timestamp,
-      messages: [
-        { role: "user", content: userText },
-        { role: "assistant", content: assistantText },
-      ],
-      files: [],
-    };
+    // Read already-logged promptIds from the session JSONL so we don't re-ingest
+    const loggedPromptIds = new Set<string>();
+    const sessionFile = path.join(projectMemoryDir, "sessions", `${sessionId}.jsonl`);
+    if (fs.existsSync(sessionFile)) {
+      const lines = fs.readFileSync(sessionFile, "utf-8").split("\n").filter((l) => l.trim());
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line) as { promptId?: string };
+          if (entry.promptId) loggedPromptIds.add(entry.promptId);
+        } catch {
+          // ignore malformed lines
+        }
+      }
+    }
 
-    // No LLM extraction — just log the turn and update the rolling summary
-    await ingestTurn(turn);
+    // Process each new prompt turn
+    let lastUserText = "";
+    let lastAssistantText = "";
+
+    for (const [promptId, userRoot] of promptRoots) {
+      if (loggedPromptIds.has(promptId)) continue;
+
+      const userText = extractText(userRoot.message.content);
+      if (!userText) continue;
+
+      // Collect all UUIDs belonging to this prompt's user messages (includes tool results)
+      const promptUuids = new Set(
+        entries.filter((e) => e.promptId === promptId).map((e) => e.uuid)
+      );
+
+      // Find the last assistant message whose parentUuid is within this prompt's UUID set
+      let assistantText = "";
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const e = entries[i];
+        if (e.message?.role !== "assistant") continue;
+        if (!e.parentUuid || !promptUuids.has(e.parentUuid)) continue;
+        const text = extractText(e.message.content);
+        if (text) { assistantText = text; break; }
+      }
+
+      const turn: Turn = {
+        client: "claude-code",
+        cwd: userRoot.cwd ?? payload.cwd,
+        sessionId,
+        timestamp: userRoot.timestamp ?? new Date().toISOString(),
+        promptId,
+        messages: [
+          { role: "user", content: userText },
+          { role: "assistant", content: assistantText },
+        ],
+        files: [],
+      };
+
+      await ingestTurn(turn);
+
+      lastUserText = userText;
+      lastAssistantText = assistantText;
+    }
 
     // Optionally update project description based on what happened this session
-    try {
-      const projectMemoryDir2 = findProjectMemoryDir(cwd);
-      if (projectMemoryDir2) {
-        const config = readProjectConfig(projectMemoryDir2);
-        const { conn: conn2 } = await getDb(projectMemoryDir2);
-        await applySchema(conn2, projectMemoryDir2);
-        const pid = config.projectId;
+    // (runs once after all new turns are processed, using the last turn's content)
+    if (lastUserText) {
+      try {
+        const projectMemoryDir2 = findProjectMemoryDir(cwd);
+        if (projectMemoryDir2) {
+          const config = readProjectConfig(projectMemoryDir2);
+          const { conn: conn2 } = await getDb(projectMemoryDir2);
+          await applySchema(conn2, projectMemoryDir2);
+          const pid = config.projectId;
 
-        const rows = await queryAll(conn2, `MATCH (p:Project {id: '${pid}'}) RETURN p`);
-        const p = rows[0]?.["p"] as Record<string, unknown> | undefined;
-        const current = p?.["description"] ? String(p["description"]) : "";
+          const rows = await queryAll(conn2, `MATCH (p:Project {id: '${pid}'}) RETURN p`);
+          const p = rows[0]?.["p"] as Record<string, unknown> | undefined;
+          const current = p?.["description"] ? String(p["description"]) : "";
 
-        const prompt = `You are maintaining a living project description for a software project called "${config.projectName}".
+          const prompt = `You are maintaining a living project description for a software project called "${config.projectName}".
 
 Current description:
 ${current || "(none yet)"}
 
 What just happened in this session (user message):
-${userText.slice(0, 800)}
+${lastUserText.slice(0, 800)}
 
 Assistant response summary:
-${assistantText.slice(0, 800)}
+${lastAssistantText.slice(0, 800)}
 
 Task: Should the project description be updated based on this session? If yes, write a concise updated description (2-5 sentences) that captures what this project is, what it does, and any key characteristics. If no update is needed, respond with exactly: NO_UPDATE
 
 Respond with either the new description text, or NO_UPDATE.`;
 
-        const result = await llmComplete(prompt);
-        const trimmed = result.trim();
-        if (trimmed && trimmed !== "NO_UPDATE" && trimmed.length > 10) {
-          await conn2.query(
-            `MATCH (p:Project {id: '${esc(pid)}'}) SET p.description = '${esc(trimmed)}'`
-          );
+          const result = await llmComplete(prompt);
+          const trimmed = result.trim();
+          if (trimmed && trimmed !== "NO_UPDATE" && trimmed.length > 10) {
+            await conn2.query(
+              `MATCH (p:Project {id: '${esc(pid)}'}) SET p.description = '${esc(trimmed)}'`
+            );
+          }
         }
+      } catch {
+        // Never block Claude on description update errors
       }
-    } catch {
-      // Never block Claude on description update errors
     }
   } catch {
     // Never block Claude on hook errors

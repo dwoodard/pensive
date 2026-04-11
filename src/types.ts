@@ -60,6 +60,7 @@ export interface Turn {
   cwd: string;
   sessionId: string;
   timestamp: string;
+  promptId?: string;
   messages: Array<{
     role: "user" | "assistant";
     content: string;

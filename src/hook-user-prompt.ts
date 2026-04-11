@@ -13,6 +13,7 @@ import { extractFromUserMessage, writeCandidateFile } from "./extract-memory.js"
 import { promoteToDb } from "./promote-memory.js";
 import { readProjectConfig } from "./config.js";
 import { getDb } from "./db.js";
+import { escape, queryAll } from "./kuzu-helpers.js";
 
 interface UserPromptPayload {
   session_id: string;
@@ -53,10 +54,33 @@ async function main(): Promise<void> {
     if (!projectMemoryDir) process.exit(0);
 
     const config = readProjectConfig(projectMemoryDir);
+    const { conn } = await getDb(projectMemoryDir);
+
+    // Ensure session exists — session-start hook may have already created it
+    const sessionId = payload.session_id;
+    const existing = await queryAll(conn,
+      `MATCH (s:Session {id: '${escape(sessionId)}'}) RETURN s.id`);
+    if (existing.length === 0) {
+      const now = new Date().toISOString();
+      await conn.query(
+        `CREATE (s:Session {
+          id: '${escape(sessionId)}',
+          projectId: '${escape(config.projectId)}',
+          startedAt: '${escape(now)}',
+          title: 'Session Initialization',
+          summary: '',
+          embedding: []
+        })`
+      );
+      await conn.query(
+        `MATCH (p:Project {id: '${escape(config.projectId)}'}), (s:Session {id: '${escape(sessionId)}'})
+         CREATE (p)-[:HAS_SESSION]->(s)`
+      );
+    }
+
     if (!config.llm?.model || config.llm.model === "local-model") process.exit(0);
 
     const turnId = `turn_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-    const sessionId = payload.session_id;
 
     // Extract high-confidence memories from user message
     const candidates = await extractFromUserMessage(userText, sessionId, turnId);
@@ -66,7 +90,6 @@ async function main(): Promise<void> {
     writeCandidateFile(projectMemoryDir, candidates);
 
     // Promote directly to DB — user's own words are high confidence
-    const { conn } = await getDb(projectMemoryDir);
     const promoted = await promoteToDb(candidates, config.projectId, conn);
 
     // promoted memories are persisted to Kuzu; no additional logging needed
