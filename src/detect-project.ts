@@ -27,6 +27,22 @@ export function getRemoteUrl(dir: string): string | null {
   }
 }
 
+/** Get the current git branch name, or null if not in a git repo or detached HEAD */
+export function getCurrentBranch(dir: string): string | null {
+  try {
+    const branch = execSync("git rev-parse --abbrev-ref HEAD", {
+      cwd: dir,
+      stdio: ["pipe", "pipe", "pipe"],
+    })
+      .toString()
+      .trim();
+    // "HEAD" means detached HEAD state
+    return branch === "HEAD" ? null : branch;
+  } catch {
+    return null;
+  }
+}
+
 export function resolveProjectIdentity(projectRoot: string): {
   remoteUrl?: string;
   projectName: string;

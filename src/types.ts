@@ -6,7 +6,7 @@ export type MemoryKind =
   | "task"
   | "question";
 
-export type TaskStatus = "pending" | "active" | "done" | "blocked";
+export type TaskStatus = "pending" | "active" | "in-review" | "done" | "blocked";
 
 export interface Project {
   id: string;
@@ -53,6 +53,8 @@ export interface Task {
   doneSuggestion?: string;
   activatedAt?: string;
   embedding?: number[];
+  branch?: string;
+  prUrl?: string;
 }
 
 export interface Turn {

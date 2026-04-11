@@ -8,6 +8,8 @@ import { queryAll, escape } from "./kuzu-helpers.js";
 import type kuzu from "kuzu";
 import type { Session, Task } from "./types.js";
 import { searchGraph, type ScoredNode } from "./search.js";
+import { getCurrentBranch } from "./detect-project.js";
+import { execSync } from "child_process";
 
 const BUDGET = 2000;
 
@@ -38,7 +40,10 @@ export function buildBundle(
   activeSubtasks: Task[] = [],
   projectDescription?: string,
   keyMemories: ScoredNode[] = [],
-  suggestedDone: Task[] = []
+  suggestedDone: Task[] = [],
+  currentBranch?: string | null,
+  branchTask?: Task | null,
+  changedFiles: string[] = []
 ): string {
   const lines: string[] = [];
   let remaining = BUDGET;
@@ -49,6 +54,18 @@ export function buildBundle(
     lines.push(safe);
     remaining -= safe.length + 1;
   };
+
+  // Branch orientation header
+  if (currentBranch && currentBranch !== "main" && currentBranch !== "master" && currentBranch !== "develop") {
+    push(`## Branch Orientation`);
+    push(`You are on branch: ${currentBranch}`);
+    if (branchTask) {
+      push(`Branch task: [${shortId(branchTask.id)}] ${branchTask.title}`);
+    } else {
+      push(`⚠ No task found for branch ${currentBranch} — create one with: pensieve tasks add "title"`);
+    }
+    push("");
+  }
 
   push(`## pensieve CLI`);
   push(`pensieve tasks              — list tasks (gantt view)`);
@@ -66,6 +83,14 @@ export function buildBundle(
   if (projectDescription) {
     push(`## Project`);
     push(truncate(projectDescription, 120));
+    push("");
+  }
+
+  // Show changed files on this branch
+  if (changedFiles.length > 0 && currentBranch && currentBranch !== "main" && currentBranch !== "master" && currentBranch !== "develop") {
+    push(`## Files Changed`);
+    changedFiles.slice(0, 10).forEach((f) => push(`  ${f}`));
+    if (changedFiles.length > 10) push(`  … and ${changedFiles.length - 10} more`);
     push("");
   }
 
@@ -152,8 +177,39 @@ export async function querySessionBundle(
   conn: InstanceType<typeof kuzu.Connection>,
   pid: string,
   excludeSessionId = "",
-  { includeMemories = false }: { includeMemories?: boolean } = {}
+  { includeMemories = false, cwd }: { includeMemories?: boolean; cwd?: string } = {}
 ): Promise<string> {
+  // Detect current branch
+  let currentBranch: string | null = null;
+  let changedFiles: string[] = [];
+  try {
+    currentBranch = getCurrentBranch(cwd ?? process.cwd());
+
+    // Get changed files on this branch if not main/develop
+    if (currentBranch && currentBranch !== "main" && currentBranch !== "master" && currentBranch !== "develop") {
+      try {
+        // Try to get diff against develop, fall back to main
+        let baseBranch = "develop";
+        try {
+          execSync("git rev-parse --verify origin/develop", { cwd: cwd ?? process.cwd(), stdio: ["pipe", "pipe", "pipe"] });
+        } catch {
+          baseBranch = "main";
+        }
+        const output = execSync(`git diff --name-only ${baseBranch}...HEAD`, {
+          cwd: cwd ?? process.cwd(),
+          stdio: ["pipe", "pipe", "pipe"],
+        }).toString().trim();
+        if (output) {
+          changedFiles = output.split("\n").filter((f) => f.length > 0);
+        }
+      } catch {
+        // Diff failed, skip
+      }
+    }
+  } catch {
+    // Not in a git repo or git not available
+  }
+
   const activeRows = await queryAll(conn,
     `MATCH (t:Task {projectId: '${pid}', status: 'active'})
      RETURN t ORDER BY t.createdAt DESC LIMIT 1`);
@@ -177,6 +233,16 @@ export async function querySessionBundle(
   const blocked = blockedRows.map((r) => r["t"] as Task);
   const lastSession = lastSessionRows[0]?.["s"] as Session | undefined ?? null;
   const projectDescription = String(projectRows[0]?.["description"] ?? "").trim() || undefined;
+
+  // Look for task matching current branch
+  let branchTask: Task | null = null;
+  if (currentBranch && currentBranch !== "main" && currentBranch !== "master" && currentBranch !== "develop") {
+    const branchRows = await queryAll(conn,
+      `MATCH (t:Task {projectId: '${pid}'})
+       WHERE t.branch = '${escape(currentBranch)}' AND (t.parentId = '' OR t.parentId IS NULL)
+       RETURN t LIMIT 1`);
+    branchTask = (branchRows[0]?.["t"] as Task | undefined) ?? null;
+  }
 
   // Recently done: everything completed since the last session started (captures a full work session)
   // Fall back to last 5 if no session reference point
@@ -215,5 +281,5 @@ export async function querySessionBundle(
      RETURN t ORDER BY t.taskOrder ASC`);
   const suggestedDone = suggestedRows.map((r) => r["t"] as Task);
 
-  return buildBundle(activeTask, pending, blocked, recentlyDone, lastSession, activeSubtasks, projectDescription, keyMemories, suggestedDone);
+  return buildBundle(activeTask, pending, blocked, recentlyDone, lastSession, activeSubtasks, projectDescription, keyMemories, suggestedDone, currentBranch, branchTask, changedFiles);
 }

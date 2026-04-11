@@ -638,6 +638,12 @@ function sessionShortId(id: string): string {
   return base.slice(0, 8);
 }
 
+function toBranchSlug(id: string, title: string): string {
+  const sid = shortId(id);
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return `${sid}-${slug}`;
+}
+
 function printSubtasks(parentId: string, subtasks: Record<string, unknown>[], indent: string): void {
   const children = subtasks.filter((s) => String(s["parentId"]) === parentId);
   children.forEach((s) => {
@@ -671,23 +677,53 @@ function printTaskWithDetails(
   printSubtasks(String(t["id"]), subtasks, subtaskIndent);
 }
 
+function formatTaskTitleWithBranch(task: Record<string, unknown>): string {
+  const branch = String(task["branch"] ?? "");
+  const prUrl = String(task["prUrl"] ?? "");
+  const status = String(task["status"] ?? "");
+
+  if (status === "in-review" && prUrl) {
+    const prMatch = prUrl.match(/#(\d+)/);
+    const prNum = prMatch ? prMatch[1] : "?";
+    return `${String(task["title"])}  ${chalk.blue(`[PR #${prNum} — awaiting review]`)}`;
+  }
+
+  if (branch) {
+    return `→  ${chalk.cyan(branch)}: ${String(task["title"])}`;
+  }
+
+  return String(task["title"]);
+}
+
 function printTaskList(
   active: Record<string, unknown> | undefined,
   pending: Record<string, unknown>[],
   blocked: Record<string, unknown>[],
   done: Record<string, unknown>[],
   subtasks: Record<string, unknown>[] = [],
-  suggestedDone: Record<string, unknown>[] = []
+  suggestedDone: Record<string, unknown>[] = [],
+  inReview: Record<string, unknown>[] = []
 ): void {
-  if (!active && pending.length === 0 && blocked.length === 0 && done.length === 0 && suggestedDone.length === 0) {
+  if (!active && pending.length === 0 && blocked.length === 0 && done.length === 0 && suggestedDone.length === 0 && inReview.length === 0) {
     console.log("No tasks. Add one: pensieve tasks add \"title\"");
     return;
   }
 
+  // Show in-review tasks first
+  if (inReview.length > 0) {
+    console.log(chalk.bold.blue("\n  AWAITING REVIEW"));
+    inReview.forEach((t) => {
+      const prUrl = String(t["prUrl"] ?? "");
+      console.log(`  ${chalk.blue("◬")}  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${formatTaskTitleWithBranch(t)}`);
+      if (prUrl) console.log(chalk.dim(`        ${prUrl}`));
+    });
+  }
+
   if (active) {
+    const titleLine = `\n${chalk.green("●")} ${chalk.bold.green("ACTIVE")} ${chalk.dim("[" + shortId(String(active["id"])) + "]")}   ${chalk.bold.green(formatTaskTitleWithBranch(active))}`;
     printTaskWithDetails(
       active,
-      `\n${chalk.green("●")} ${chalk.bold.green("ACTIVE")} ${chalk.dim("[" + shortId(String(active["id"])) + "]")}   ${chalk.bold.green(String(active["title"]))}`,
+      titleLine,
       subtasks,
       "                      ",
       "       "
@@ -699,9 +735,10 @@ function printTaskList(
   if (pending.length > 0) {
     console.log(chalk.bold("\n  QUEUE"));
     pending.forEach((t, i) => {
+      const titleLine = `  ${chalk.dim(String(i + 1).padStart(2))}  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${formatTaskTitleWithBranch(t)}`;
       printTaskWithDetails(
         t,
-        `  ${chalk.dim(String(i + 1).padStart(2))}  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${t["title"]}`,
+        titleLine,
         subtasks,
         "        ",
         "        "
@@ -712,9 +749,10 @@ function printTaskList(
   if (blocked.length > 0) {
     console.log(chalk.bold.yellow("\n  BLOCKED"));
     blocked.forEach((t) => {
+      const titleLine = `  ${chalk.yellow("✗")}  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${chalk.yellow(formatTaskTitleWithBranch(t))}`;
       printTaskWithDetails(
         t,
-        `  ${chalk.yellow("✗")}  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${chalk.yellow(String(t["title"]))}`,
+        titleLine,
         subtasks,
         "        ",
         "        "
@@ -726,7 +764,7 @@ function printTaskList(
     console.log(chalk.bold.cyan("\n  MAY BE DONE"));
     suggestedDone.forEach((t) => {
       const id = shortId(String(t["id"]));
-      console.log(`  ${chalk.cyan("?")}  ${chalk.dim("[" + id + "]")}  ${chalk.cyan(String(t["title"]))}`);
+      console.log(`  ${chalk.cyan("?")}  ${chalk.dim("[" + id + "]")}  ${chalk.cyan(formatTaskTitleWithBranch(t))}`);
       if (t["doneSuggestion"]) {
         console.log(chalk.dim(`         "${String(t["doneSuggestion"]).slice(0, 100)}"`));
       }
@@ -740,7 +778,7 @@ function printTaskList(
       const id = shortId(String(t["id"]));
       const subCount = subtasks.filter((s) => String(s["parentId"]) === String(t["id"])).length;
       const subtasksBadge = subCount > 0 ? chalk.dim(` (${subCount} subtask${subCount > 1 ? "s" : ""})`) : "";
-      console.log(chalk.dim(`  ✓  [${id}]${subtasksBadge}  ${t["title"]}`));
+      console.log(chalk.dim(`  ✓  [${id}]${subtasksBadge}  ${formatTaskTitleWithBranch(t)}`));
     });
   }
 
@@ -771,6 +809,10 @@ tasksCmd
       `MATCH (m:Task {projectId: '${pid}', status: 'blocked'})
        WHERE m.parentId = '' OR m.parentId IS NULL
        RETURN m ORDER BY m.createdAt DESC`);
+    const inReviewRows = await queryAll(conn,
+      `MATCH (m:Task {projectId: '${pid}', status: 'in-review'})
+       WHERE m.parentId = '' OR m.parentId IS NULL
+       RETURN m ORDER BY m.createdAt DESC`);
 
     const doneRows = opts.done ? await queryAll(conn,
       `MATCH (m:Task {projectId: '${pid}', status: 'done'})
@@ -791,7 +833,8 @@ tasksCmd
       blockedRows.map((r) => r["m"] as Record<string, unknown>),
       doneRows.map((r) => r["m"] as Record<string, unknown>),
       subtaskRows.map((r) => r["t"] as Record<string, unknown>),
-      suggestedDoneRows.map((r) => r["m"] as Record<string, unknown>)
+      suggestedDoneRows.map((r) => r["m"] as Record<string, unknown>),
+      inReviewRows.map((r) => r["m"] as Record<string, unknown>)
     );
   });
 
@@ -799,13 +842,31 @@ tasksCmd
   .command("add <title>")
   .description("Add a task to the queue")
   .option("--parent <target>", "Parent task id prefix, queue position, or 'active'")
-  .action(async (title: string, opts: { parent?: string }) => {
+  .option("--no-parent", "Do not auto-detect parent on feature branch")
+  .action(async (title: string, opts: { parent?: string; noParent?: boolean }) => {
     const { config, conn } = await getProjectDb(process.cwd());
     const pid = config.projectId;
     const { escape: esc } = await import("./kuzu-helpers.js");
     const { default: crypto } = await import("crypto");
+    const { getCurrentBranch } = await import("./detect-project.js");
 
     let parentId = "";
+
+    // Try to auto-detect parent from current branch if not explicitly disabled
+    if (!opts.parent && !opts.noParent) {
+      const currentBranch = getCurrentBranch(process.cwd());
+      if (currentBranch && currentBranch !== "main" && currentBranch !== "master" && currentBranch !== "develop") {
+        // Look for a parent task with matching branch
+        const branchRows = await queryAll(conn,
+          `MATCH (t:Task {projectId: '${pid}'})
+           WHERE t.branch = '${esc(currentBranch)}' AND (t.parentId = '' OR t.parentId IS NULL)
+           RETURN t LIMIT 1`);
+        if (branchRows.length > 0) {
+          parentId = String((branchRows[0]["t"] as Record<string, unknown>)["id"]);
+        }
+      }
+    }
+
     if (opts.parent) {
       const allRows = await queryAll(conn,
         `MATCH (t:Task {projectId: '${pid}'}) WHERE t.status <> 'done' RETURN t ORDER BY t.taskOrder ASC`);
@@ -969,6 +1030,22 @@ tasksCmd
       process.exit(1);
     }
 
+    const targetTask = pending.find((t) => String(t["id"]) === target_id);
+    const isTopLevel = !targetTask || !String(targetTask["parentId"] ?? "");
+
+    // For top-level tasks, compute and store branch slug
+    let branchSlug = "";
+    if (isTopLevel) {
+      const storedBranch = targetTask ? String(targetTask["branch"] ?? "") : "";
+      if (storedBranch) {
+        branchSlug = storedBranch;
+      } else {
+        // Compute new branch slug from task id and title
+        const taskTitle = String(targetTask?.["title"] ?? "");
+        branchSlug = toBranchSlug(target_id, taskTitle);
+      }
+    }
+
     // Demote any currently active task — push it to front of queue
     const minOrderRows = await queryAll(conn,
       `MATCH (m:Task {projectId: '${esc(pid)}', status: 'pending'})
@@ -976,15 +1053,27 @@ tasksCmd
     const minOrder = Number(minOrderRows[0]?.["minOrder"] ?? 1);
     await conn.query(
       `MATCH (m:Task {projectId: '${esc(pid)}', status: 'active'})
+       WHERE m.parentId = '' OR m.parentId IS NULL
        SET m.status = 'pending', m.taskOrder = ${minOrder - 1}`
     );
     const activatedAt = new Date().toISOString();
-    await conn.query(
-      `MATCH (m:Task {id: '${esc(target_id)}'}) SET m.status = 'active', m.doneSuggestion = '', m.activatedAt = '${esc(activatedAt)}'`
-    );
+
+    // Activate the target task, optionally store branch
+    if (branchSlug) {
+      await conn.query(
+        `MATCH (m:Task {id: '${esc(target_id)}'}) SET m.status = 'active', m.doneSuggestion = '', m.activatedAt = '${esc(activatedAt)}', m.branch = '${esc(branchSlug)}'`
+      );
+    } else {
+      await conn.query(
+        `MATCH (m:Task {id: '${esc(target_id)}'}) SET m.status = 'active', m.doneSuggestion = '', m.activatedAt = '${esc(activatedAt)}'`
+      );
+    }
 
     const title = pending.find((t) => String(t["id"]) === target_id)?.["title"];
     console.log(`${chalk.green("Active:")} ${title}`);
+    if (branchSlug) {
+      console.log(chalk.dim(`Branch: ${branchSlug}`));
+    }
   });
 
 tasksCmd
@@ -997,22 +1086,51 @@ tasksCmd
     const { escape: esc } = await import("./kuzu-helpers.js");
     const note = opts.note ?? "";
 
+    const now = new Date().toISOString();
+
+    // Fetch all tasks upfront for both paths
+    const allRows = await queryAll(conn,
+      `MATCH (m:Task {projectId: '${pid}'})
+       RETURN m ORDER BY m.taskOrder ASC`);
+    const all = allRows.map((r) => r["m"] as Record<string, unknown>);
+
+    // Helper: mark a task and its pending children as done
+    const markTaskDone = async (taskId: string, taskTitle: string) => {
+      await conn.query(
+        `MATCH (m:Task {id: '${esc(taskId)}'})
+         SET m.status = 'done', m.completedAt = '${now}', m.completionNote = '${esc(note)}', m.doneSuggestion = ''`
+      );
+      console.log(`${chalk.green("Done:")} ${taskTitle}`);
+      if (note) console.log(chalk.dim(`  "${note}"`));
+
+      // If this is a parent task, cascade to pending children
+      const taskRecord = all.find((t) => String(t["id"]) === taskId);
+      if (taskRecord && (!taskRecord["parentId"] || taskRecord["parentId"] === "")) {
+        // This is a top-level task, cascade to its children
+        const childRows = await queryAll(conn,
+          `MATCH (c:Task {projectId: '${pid}'})
+           WHERE c.parentId = '${esc(taskId)}' AND c.status <> 'done'
+           RETURN c`);
+        const children = childRows.map((r) => r["c"] as Record<string, unknown>);
+        for (const child of children) {
+          await conn.query(
+            `MATCH (c:Task {id: '${esc(String(child["id"]))}'})
+             SET c.status = 'done', c.completedAt = '${now}'`
+          );
+        }
+      }
+    };
+
     if (targets.length === 0) {
       const rows = await queryAll(conn,
         `MATCH (m:Task {projectId: '${pid}', status: 'active'})
          RETURN m LIMIT 1`);
       if (rows.length === 0) { console.log(chalk.dim("No active task.")); return; }
       const task = rows[0]["m"] as Record<string, unknown>;
-      await conn.query(`MATCH (m:Task {id: '${esc(String(task["id"]))}' }) SET m.status = 'done', m.completedAt = '${new Date().toISOString()}', m.completionNote = '${esc(note)}', m.doneSuggestion = ''`);
-      console.log(`${chalk.green("Done:")} ${task["title"]}`);
-      if (note) console.log(chalk.dim(`  "${note}"`));
+      await markTaskDone(String(task["id"]), String(task["title"]));
       return;
     }
 
-    const allRows = await queryAll(conn,
-      `MATCH (m:Task {projectId: '${pid}'}) WHERE m.status <> 'done'
-       RETURN m ORDER BY m.taskOrder ASC`);
-    const all = allRows.map((r) => r["m"] as Record<string, unknown>);
     const pending = all.filter((t) => t["status"] === "pending");
 
     for (const target of targets) {
@@ -1024,9 +1142,7 @@ tasksCmd
         task = all.find((t) => shortId(String(t["id"])).startsWith(target));
       }
       if (!task) { cerr(`No task matching "${target}"`); continue; }
-      await conn.query(`MATCH (m:Task {id: '${esc(String(task["id"]))}' }) SET m.status = 'done', m.completedAt = '${new Date().toISOString()}', m.completionNote = '${esc(note)}', m.doneSuggestion = ''`);
-      console.log(`${chalk.green("Done:")} ${task["title"]}`);
-      if (note) console.log(chalk.dim(`  "${note}"`));
+      await markTaskDone(String(task["id"]), String(task["title"]));
     }
   });
 
@@ -1141,6 +1257,92 @@ tasksCmd
     pending.forEach((t, i) =>
       console.log(`  ${chalk.dim(String(i + 1))}  ${t["title"]}`)
     );
+  });
+
+tasksCmd
+  .command("branch <target> [branch-name]")
+  .description("Get or set the branch name for a task (parent tasks only)")
+  .action(async (target: string, branchName: string | undefined) => {
+    const { config, conn } = await getProjectDb(process.cwd());
+    const pid = config.projectId;
+    const { escape: esc } = await import("./kuzu-helpers.js");
+
+    const allRows = await queryAll(conn,
+      `MATCH (t:Task {projectId: '${pid}'})
+       WHERE t.parentId = '' OR t.parentId IS NULL
+       RETURN t ORDER BY t.taskOrder ASC`);
+    const all = allRows.map((r) => r["t"] as Record<string, unknown>);
+
+    let targetId: string | undefined;
+    const pos = /^\d+$/.test(target) ? parseInt(target, 10) : NaN;
+    if (!isNaN(pos) && pos >= 1 && pos <= all.length) {
+      targetId = String(all[pos - 1]["id"]);
+    } else {
+      const match = all.find((t) => shortId(String(t["id"])).startsWith(target));
+      targetId = match ? String(match["id"]) : undefined;
+    }
+
+    if (!targetId) {
+      cerr(`No parent task matching "${target}". Run: pensieve tasks`);
+      process.exit(1);
+    }
+
+    const task = all.find((t) => String(t["id"]) === targetId);
+
+    if (!branchName) {
+      // Get branch
+      const currentBranch = String(task?.["branch"] ?? "");
+      if (currentBranch) {
+        console.log(`${chalk.dim("[" + shortId(targetId) + "]")}  ${task?.["title"]}`);
+        console.log(chalk.cyan(`  Branch: ${currentBranch}`));
+      } else {
+        console.log(`${chalk.dim("[" + shortId(targetId) + "]")}  ${task?.["title"]}`);
+        console.log(chalk.dim("  No branch set"));
+      }
+    } else {
+      // Set branch
+      await conn.query(
+        `MATCH (t:Task {id: '${esc(targetId)}'}) SET t.branch = '${esc(branchName)}'`
+      );
+      console.log(`${chalk.green("Branch set:")} ${branchName}`);
+      console.log(chalk.dim(`  ${task?.["title"]}`));
+    }
+  });
+
+tasksCmd
+  .command("pr <target> <url>")
+  .description("Record a PR URL and move task to in-review status")
+  .action(async (target: string, url: string) => {
+    const { config, conn } = await getProjectDb(process.cwd());
+    const pid = config.projectId;
+    const { escape: esc } = await import("./kuzu-helpers.js");
+
+    const allRows = await queryAll(conn,
+      `MATCH (t:Task {projectId: '${pid}'})
+       WHERE t.parentId = '' OR t.parentId IS NULL
+       RETURN t ORDER BY t.taskOrder ASC`);
+    const all = allRows.map((r) => r["t"] as Record<string, unknown>);
+
+    let targetId: string | undefined;
+    const pos = /^\d+$/.test(target) ? parseInt(target, 10) : NaN;
+    if (!isNaN(pos) && pos >= 1 && pos <= all.length) {
+      targetId = String(all[pos - 1]["id"]);
+    } else {
+      const match = all.find((t) => shortId(String(t["id"])).startsWith(target));
+      targetId = match ? String(match["id"]) : undefined;
+    }
+
+    if (!targetId) {
+      cerr(`No parent task matching "${target}". Run: pensieve tasks`);
+      process.exit(1);
+    }
+
+    const task = all.find((t) => String(t["id"]) === targetId);
+    await conn.query(
+      `MATCH (t:Task {id: '${esc(targetId)}'}) SET t.prUrl = '${esc(url)}', t.status = 'in-review'`
+    );
+    console.log(`${chalk.green("PR recorded:")} ${task?.["title"]}`);
+    console.log(chalk.dim(`  ${url}`));
   });
 
 // ── Sessions ─────────────────────────────────────────────────────────────────

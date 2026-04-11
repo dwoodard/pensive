@@ -185,6 +185,8 @@ export async function applySchema(
   try { await conn.query(`ALTER TABLE Task ADD embedding FLOAT[] DEFAULT []`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Task ADD doneSuggestion STRING DEFAULT ''`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Task ADD activatedAt STRING DEFAULT ''`); } catch { /* exists */ }
+  try { await conn.query(`ALTER TABLE Task ADD branch STRING DEFAULT ''`); } catch { /* exists */ }
+  try { await conn.query(`ALTER TABLE Task ADD prUrl STRING DEFAULT ''`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Session ADD embedding FLOAT[] DEFAULT []`); } catch { /* exists */ }
 
   // Edge property migrations
