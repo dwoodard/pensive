@@ -6,7 +6,7 @@ Please walk through the branch-aware task management system in pensieve. Follow 
 2. Start it: `pensieve tasks start 1` — watch for the auto-generated branch slug
 3. Create feature branch: `git checkout -b` with the branch name from step 2
 4. View tasks: `pensieve tasks` — notice the branch is now displayed
-5. Add three subtasks (they auto-parent): 
+5. Add three subtasks (they auto-parent):
    - `pensieve tasks add "Write login form component"`
    - `pensieve tasks add "Set up authentication API endpoint"`
    - `pensieve tasks add "Add unit tests"`
@@ -22,4 +22,4 @@ Please walk through the branch-aware task management system in pensieve. Follow 
 After completing the walkthrough:
 - Report what features worked
 - Note any issues or unexpected behavior
-- Clean up: `pensieve tasks remove --all` (confirm with 'y')
+
