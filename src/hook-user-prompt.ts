@@ -80,7 +80,7 @@ async function main(): Promise<void> {
 
     if (!config.llm?.model || config.llm.model === "local-model") process.exit(0);
 
-    const turnId = `turn_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const turnId = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
 
     // Extract high-confidence memories from user message
     const candidates = await extractFromUserMessage(userText, sessionId, turnId);

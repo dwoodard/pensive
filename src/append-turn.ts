@@ -42,7 +42,7 @@ export function writeSessionLog(
   const filePaths = extractFilePaths(allText);
 
   const entry: TurnEntry = {
-    turnId: `turn_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
+    turnId: crypto.randomUUID().replace(/-/g, "").slice(0, 12),
     timestamp: turn.timestamp,
     messages: turn.messages,
     files: filePaths,
